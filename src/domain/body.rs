@@ -19,8 +19,9 @@ pub fn append(body: &str, text: &str) -> String {
 /// level, or to the end of the body. An empty replacement clears the section content.
 pub fn replace_section(body: &str, heading: &str, text: &str) -> Result<String, AppError> {
     let heading = heading.trim();
-    let level = atx_level(heading)
-        .ok_or(AppError::invalid_input("section heading must be an ATX heading"))?;
+    let level = atx_level(heading).ok_or(AppError::invalid_input(
+        "section heading must be an ATX heading",
+    ))?;
     let lines: Vec<&str> = body.split('\n').collect();
     let start = lines
         .iter()
@@ -44,7 +45,10 @@ pub fn replace_section(body: &str, heading: &str, text: &str) -> Result<String, 
 
 fn atx_level(line: &str) -> Option<usize> {
     let trimmed = line.trim_start();
-    let hashes = trimmed.chars().take_while(|character| *character == '#').count();
+    let hashes = trimmed
+        .chars()
+        .take_while(|character| *character == '#')
+        .count();
     if hashes == 0 || hashes > 6 {
         return None;
     }
@@ -72,7 +76,8 @@ mod tests {
     #[test]
     fn replaces_only_the_named_section() {
         let body = "# Title\n\nintro\n\n## Acceptance\n\nold acceptance\n\n### Note\n\nkeep\n\n## Other\n\nkeep other";
-        let updated = replace_section(body, "## Acceptance", "new acceptance").expect("replace section");
+        let updated =
+            replace_section(body, "## Acceptance", "new acceptance").expect("replace section");
         assert_eq!(
             updated,
             "# Title\n\nintro\n\n## Acceptance\nnew acceptance\n\n## Other\n\nkeep other"

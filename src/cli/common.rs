@@ -1,6 +1,8 @@
+use std::str::FromStr;
+
 use clap::Args;
 
-/// Body-change flags shared by `issue edit` and `pr update`.
+/// Body-change flags shared by `issue edit` and `pr edit`.
 ///
 /// The item is fetched once, the change is applied to that text, and one write is sent, so a
 /// caller never has to reproduce the current body.
@@ -40,5 +42,43 @@ pub fn parse_limit(value: &str) -> Result<usize, &'static str> {
         Ok(limit)
     } else {
         Err("limit must be between 1 and 1000")
+    }
+}
+
+/// GitLab returns at most 100 items per page, so a larger request cannot be honored.
+pub fn parse_per_page(value: &str) -> Result<usize, &'static str> {
+    let per_page = value
+        .parse::<usize>()
+        .map_err(|_| "per-page must be an integer")?;
+    if (1..=100).contains(&per_page) {
+        Ok(per_page)
+    } else {
+        Err("per-page must be between 1 and 100")
+    }
+}
+
+/// A positive work-item number, shared by every provider grammar.
+#[derive(Debug, Clone, Copy)]
+pub struct IssueNumber(pub u64);
+
+impl FromStr for IssueNumber {
+    type Err = &'static str;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let number = value
+            .parse::<u64>()
+            .map_err(|_| "expected a positive issue number")?;
+        if number == 0 {
+            return Err("expected a positive issue number");
+        }
+        Ok(Self(number))
+    }
+}
+
+pub fn parse_non_blank(value: &str) -> Result<String, &'static str> {
+    if value.trim().is_empty() {
+        Err("value must not be blank")
+    } else {
+        Ok(value.to_owned())
     }
 }

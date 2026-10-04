@@ -41,6 +41,18 @@ fn create_sends_the_body_and_flags_to_gh() {
             "--head",
             "feature-x",
             "--draft",
+            "--assignee",
+            "octocat",
+            "--label",
+            "bug",
+            "--label",
+            "p1",
+            "--reviewer",
+            "hubot",
+            "--milestone",
+            "M1",
+            "--project",
+            "Roadmap",
         ],
         "",
     );
@@ -54,14 +66,94 @@ fn create_sends_the_body_and_flags_to_gh() {
         "Fixes the bug\n\nDetails.\nCloses #7\nCloses #9"
     );
     let lines = gh_lines(&fixture);
-    assert!(lines.contains(
-        &"pr create --repo owner/repo --title Add feature --body-file - --base main --head feature-x --draft"
-            .to_string()
-    ));
+    assert!(
+        lines.contains(
+            &"pr create --repo owner/repo --title Add feature --body-file - --base main --head feature-x --draft --assignee octocat --label bug --label p1 --reviewer hubot --milestone M1 --project Roadmap"
+                .to_string()
+        ),
+        "actual gh calls: {lines:?}"
+    );
     assert!(lines.contains(
         &"pr view 42 --repo owner/repo --json number,title,body,state,isDraft,url,baseRefName,headRefName,author,createdAt,updatedAt,mergedAt,mergeable,reviewDecision,labels,assignees"
             .to_string()
     ));
+}
+
+#[test]
+fn attachments_are_forwarded_and_require_a_supported_gh() {
+    let fixture = Fixture::new();
+    let created = fixture.run_pr(
+        &[
+            "pr",
+            "create",
+            "--title",
+            "With media",
+            "--attach",
+            "screen.png#Screenshot",
+        ],
+        "",
+    );
+    assert_eq!(success_json(&created)["number"], 42);
+    let lines = gh_lines(&fixture);
+    assert!(lines.contains(&"--version".to_string()));
+    assert!(lines.contains(
+        &"pr create --repo owner/repo --title With media --body-file - --attach screen.png#Screenshot"
+            .to_string()
+    ));
+
+    let edited = fixture.run_pr(&["pr", "edit", "42", "--attach", "clip.mp4"], "");
+    assert_eq!(success_json(&edited)["number"], 42);
+    let lines = gh_lines(&fixture);
+    assert!(lines.contains(&"pr edit 42 --repo owner/repo --attach clip.mp4".to_string()));
+
+    let old = Fixture::new();
+    let rejected = old.run_pr(
+        &[
+            "pr",
+            "create",
+            "--title",
+            "Old CLI",
+            "--attach",
+            "screen.png",
+        ],
+        "old-version",
+    );
+    assert_eq!(error_json(&rejected)["code"], "dependency_version");
+    assert_eq!(
+        gh_lines(&old),
+        ["auth status --hostname github.com", "--version"]
+    );
+}
+
+#[test]
+fn failed_attachment_create_warns_to_check_remote_without_retrying() {
+    let fixture = Fixture::new();
+    let output = fixture.run_pr(
+        &["pr", "create", "--title", "Media", "--attach", "screen.png"],
+        "attachment-create-failure",
+    );
+    assert_eq!(error_json(&output)["code"], "attachment_create_uncertain");
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("private provider diagnostic"));
+    assert_eq!(
+        gh_lines(&fixture)
+            .iter()
+            .filter(|line| line.starts_with("pr create"))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn pr_create_keeps_the_body_explicit_and_metadata_optional() {
+    let fixture = Fixture::new();
+    let output = fixture.run_pr(&["pr", "create", "--help"], "");
+    assert!(output.status.success());
+    let help = String::from_utf8_lossy(&output.stdout);
+    assert!(help.contains("--title"));
+    assert!(help.contains("--label"));
+    assert!(help.contains("--reviewer"));
+    assert!(!help.contains("--fill"));
+    assert!(!fixture.log.exists());
 }
 
 #[test]
@@ -116,9 +208,9 @@ fn list_forwards_filters_and_normalizes_summaries() {
 }
 
 #[test]
-fn show_returns_a_pull_request_or_reports_it_is_not_one() {
+fn view_returns_a_pull_request_or_reports_it_is_not_one() {
     let fixture = Fixture::new();
-    let shown = fixture.run_pr(&["pr", "show", "42"], "");
+    let shown = fixture.run_pr(&["pr", "view", "42"], "");
     let shown = success_json(&shown);
     assert_eq!(shown["number"], 42);
     assert_eq!(shown["body"], "PR body");
@@ -129,7 +221,7 @@ fn show_returns_a_pull_request_or_reports_it_is_not_one() {
     assert_eq!(shown["labels"], json!(["bug"]));
     assert_eq!(shown["assignees"], json!(["hubot"]));
 
-    let missing = fixture.run_pr(&["pr", "show", "42"], "pr-view-failure");
+    let missing = fixture.run_pr(&["pr", "view", "42"], "pr-view-failure");
     assert_eq!(error_json(&missing)["code"], "not_pull_request");
 }
 
@@ -156,16 +248,18 @@ fn checks_parse_failing_reports_and_treat_missing_checks_as_empty() {
         &"pr checks 42 --repo owner/repo --required --json name,state,bucket,description,link,workflow"
             .to_string()
     ));
-    assert!(lines.contains(
-        &"pr checks 42 --repo owner/repo --json name,state,bucket,description,link,workflow"
-            .to_string()
-    ));
+    assert!(
+        lines.contains(
+            &"pr checks 42 --repo owner/repo --json name,state,bucket,description,link,workflow"
+                .to_string()
+        )
+    );
 }
 
 #[test]
-fn update_applies_a_body_change_and_rejects_a_stale_write() {
+fn edit_applies_a_body_change_and_rejects_a_stale_write() {
     let fixture = Fixture::new();
-    let appended = fixture.run_pr(&["pr", "update", "42", "--append-body", "extra"], "");
+    let appended = fixture.run_pr(&["pr", "edit", "42", "--append-body", "extra"], "");
     let appended = success_json(&appended);
     assert_eq!(appended["number"], 42);
     // The body is appended to the fetched body, not replaced.
@@ -174,7 +268,7 @@ fn update_applies_a_body_change_and_rejects_a_stale_write() {
     let stale = fixture.run_pr(
         &[
             "pr",
-            "update",
+            "edit",
             "42",
             "--title",
             "Stale",
@@ -188,16 +282,22 @@ fn update_applies_a_body_change_and_rejects_a_stale_write() {
     let lines = gh_lines(&fixture);
     assert!(lines.contains(&"pr edit 42 --repo owner/repo --body-file -".to_string()));
     // The stale guard refuses before any write: one edit for the append, none for the stale call.
-    assert_eq!(lines.iter().filter(|line| line.starts_with("pr edit")).count(), 1);
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.starts_with("pr edit"))
+            .count(),
+        1
+    );
 }
 
 #[test]
-fn update_forwards_metadata_flags_and_requires_a_change() {
+fn edit_forwards_metadata_flags_and_requires_a_change() {
     let fixture = Fixture::new();
     let labeled = fixture.run_pr(
         &[
             "pr",
-            "update",
+            "edit",
             "42",
             "--base",
             "release",
@@ -215,17 +315,39 @@ fn update_forwards_metadata_flags_and_requires_a_change() {
             "octocat",
             "--milestone",
             "v1",
+            "--add-project",
+            "Roadmap",
+            "--remove-project",
+            "Backlog",
         ],
         "",
     );
     success_json(&labeled);
     let lines = gh_lines(&fixture);
     assert!(lines.contains(
-        &"pr edit 42 --repo owner/repo --base release --add-label bug --remove-label stale --add-reviewer hubot --remove-reviewer octocat --add-assignee hubot --remove-assignee octocat --milestone v1"
+        &"pr edit 42 --repo owner/repo --base release --add-label bug --remove-label stale --add-reviewer hubot --remove-reviewer octocat --add-assignee hubot --remove-assignee octocat --milestone v1 --add-project Roadmap --remove-project Backlog"
             .to_string()
     ));
 
-    let empty = fixture.run_pr(&["pr", "update", "42"], "");
+    let unmilestoned = fixture.run_pr(&["pr", "edit", "42", "--clear-milestone"], "");
+    success_json(&unmilestoned);
+    assert!(
+        gh_lines(&fixture).contains(&"pr edit 42 --repo owner/repo --remove-milestone".to_string())
+    );
+
+    let empty = fixture.run_pr(&["pr", "edit", "42"], "");
+    let conflicting = fixture.run_pr(
+        &[
+            "pr",
+            "edit",
+            "42",
+            "--milestone",
+            "M1",
+            "--clear-milestone",
+        ],
+        "",
+    );
+    assert_eq!(error_json(&conflicting)["code"], "invalid_input");
     assert_eq!(error_json(&empty)["code"], "invalid_input");
     // The empty update is rejected before any provider call.
     assert_eq!(
@@ -233,7 +355,7 @@ fn update_forwards_metadata_flags_and_requires_a_change() {
             .iter()
             .filter(|line| line.starts_with("pr edit"))
             .count(),
-        1
+        2
     );
 }
 
@@ -298,9 +420,10 @@ fn review_merge_ready_close_and_reopen_use_the_gh_commands() {
     let lines = gh_lines(&fixture);
     assert!(lines.contains(&"pr review 42 --repo owner/repo --approve --body-file -".to_string()));
     assert!(lines.contains(&"pr review 42 --repo owner/repo --request-changes".to_string()));
-    assert!(lines.contains(
-        &"pr merge 42 --repo owner/repo --squash --delete-branch --auto".to_string()
-    ));
+    assert!(
+        lines
+            .contains(&"pr merge 42 --repo owner/repo --squash --delete-branch --auto".to_string())
+    );
     assert!(lines.contains(&"pr ready 42 --repo owner/repo".to_string()));
     assert!(lines.contains(&"pr ready 42 --repo owner/repo --undo".to_string()));
     assert!(lines.contains(&"pr close 42 --repo owner/repo -c bye --delete-branch".to_string()));
@@ -325,10 +448,7 @@ fn diff_prints_the_patch_as_json_or_raw_text() {
     assert!(patch.contains("diff --git a/src/lib.rs b/src/lib.rs"));
     assert!(patch.contains("-old line\n+new line"));
 
-    let as_text = fixture.run_pr(
-        &["--format", "text", "pr", "diff", "42", "--name-only"],
-        "",
-    );
+    let as_text = fixture.run_pr(&["--format", "text", "pr", "diff", "42", "--name-only"], "");
     assert!(as_text.status.success());
     assert!(as_text.stderr.is_empty());
     let rendered = String::from_utf8_lossy(&as_text.stdout);
@@ -338,4 +458,71 @@ fn diff_prints_the_patch_as_json_or_raw_text() {
     let lines = gh_lines(&fixture);
     assert!(lines.contains(&"pr diff 42 --repo owner/repo".to_string()));
     assert!(lines.contains(&"pr diff 42 --repo owner/repo --name-only".to_string()));
+}
+
+#[test]
+fn pr_create_and_edit_resolve_the_current_milestone_only_when_requested() {
+    let fixture = Fixture::new();
+    let created = fixture.run_pr(
+        &["pr", "create", "--title", "No milestone"],
+        "milestone-nearest",
+    );
+    assert_eq!(success_json(&created)["number"], 42);
+    assert!(!gh_lines(&fixture).iter().any(|line| line.contains("milestones")));
+    assert!(!gh_lines(&fixture).iter().any(|line| line.contains("--milestone")));
+
+    let current = Fixture::new();
+    let created = current.run_pr(
+        &["pr", "create", "--title", "Current", "--milestone", "@current"],
+        "milestone-nearest",
+    );
+    assert_eq!(success_json(&created)["number"], 42);
+    let lines = gh_lines(&current);
+    assert!(lines.iter().any(|line| line.contains("milestones")));
+    assert!(lines.iter().any(|line| {
+        line == "pr create --repo owner/repo --title Current --body-file - --milestone Sooner"
+    }));
+
+    let updated = Fixture::new();
+    success_json(&updated.run_pr(
+        &["pr", "edit", "42", "--milestone", "@current"],
+        "milestone-nearest",
+    ));
+    let lines = gh_lines(&updated);
+    assert!(lines.iter().any(|line| line.contains("milestones")));
+    assert!(lines.contains(&"pr edit 42 --repo owner/repo --milestone Sooner".to_string()));
+
+    let explicit = Fixture::new();
+    let created = explicit.run_pr(
+        &["pr", "create", "--title", "Explicit", "--milestone", "M1"],
+        "milestone-tie",
+    );
+    assert_eq!(success_json(&created)["number"], 42);
+    let lines = gh_lines(&explicit);
+    assert!(!lines.iter().any(|line| line.contains("milestones")));
+    assert!(lines.iter().any(|line| {
+        line == "pr create --repo owner/repo --title Explicit --body-file - --milestone M1"
+    }));
+
+    let missing = Fixture::new();
+    let output = missing.run_pr(
+        &["pr", "create", "--title", "None eligible", "--milestone", "@current"],
+        "",
+    );
+    assert_eq!(error_json(&output)["code"], "invalid_input");
+    assert!(!gh_lines(&missing).iter().any(|line| line.starts_with("pr create")));
+}
+
+#[test]
+fn whitespace_only_names_and_filters_fail_during_clap_parsing() {
+    let fixture = Fixture::new();
+    for args in [
+        &["pr", "create", "--title", "Valid", "--reviewer", "   "][..],
+        &["pr", "list", "--author", "   "][..],
+        &["pr", "edit", "42", "--add-project", "   "][..],
+    ] {
+        let output = fixture.run_pr(args, "");
+        assert_eq!(error_json(&output)["code"], "invalid_input");
+    }
+    assert!(!fixture.log.exists());
 }

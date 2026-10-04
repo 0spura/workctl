@@ -26,7 +26,8 @@ struct CliIssueSummary {
 }
 
 pub fn issue(bytes: &[u8]) -> Result<Issue, AppError> {
-    let response: ApiIssue = serde_json::from_slice(bytes).map_err(|_| AppError::provider_response())?;
+    let response: ApiIssue =
+        serde_json::from_slice(bytes).map_err(|_| AppError::provider_response())?;
     if response.pull_request.is_some() {
         return Err(AppError::not_issue());
     }

@@ -1,4 +1,5 @@
 pub mod github;
+pub mod gitlab;
 
 use crate::domain::{AppError, CheckRun, Issue, IssueSummary, PullRequest, PullRequestSummary};
 
@@ -20,7 +21,11 @@ pub struct IssueQuery {
 pub struct NewIssue {
     pub title: String,
     pub body: String,
-    pub attachments: Vec<Attachment>,
+    pub assignees: Vec<String>,
+    pub labels: Vec<String>,
+    pub milestone: Option<String>,
+    pub projects: Vec<String>,
+    pub attachments: Vec<String>,
 }
 
 /// A change requested without the caller having to reproduce the current body.
@@ -28,7 +33,10 @@ pub struct NewIssue {
 pub enum BodyChange {
     Replace(String),
     Append(String),
-    ReplaceSection { heading: String, body: String },
+    ReplaceSection {
+        heading: String,
+        body: String,
+    },
     /// Unified diff applied to the current body.
     Patch(String),
 }
@@ -37,25 +45,16 @@ pub enum BodyChange {
 pub struct IssuePatch {
     pub title: Option<String>,
     pub body: Option<BodyChange>,
-    pub attachments: Vec<Attachment>,
+    pub assignees_add: Vec<String>,
+    pub assignees_remove: Vec<String>,
+    pub labels_add: Vec<String>,
+    pub labels_remove: Vec<String>,
+    pub milestone: Option<String>,
+    pub clear_milestone: bool,
+    pub projects_add: Vec<String>,
+    pub projects_remove: Vec<String>,
+    pub attachments: Vec<String>,
     pub expect_updated_at: Option<String>,
-}
-
-/// Local file to upload, optionally with image alt text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Attachment {
-    pub path: String,
-    pub alt: Option<String>,
-}
-
-impl Attachment {
-    /// Value accepted by `gh --attach`, in `path[#alt]` form.
-    pub fn gh_argument(&self) -> String {
-        match &self.alt {
-            Some(alt) => format!("{}#{alt}", self.path),
-            None => self.path.clone(),
-        }
-    }
 }
 
 /// Bounded query for pull request summaries. Every set field maps to one provider filter.
@@ -82,6 +81,12 @@ pub struct NewPr {
     pub draft: bool,
     /// Issues the pull request closes when it merges.
     pub closes: Vec<u64>,
+    pub assignees: Vec<String>,
+    pub labels: Vec<String>,
+    pub reviewers: Vec<String>,
+    pub milestone: Option<String>,
+    pub projects: Vec<String>,
+    pub attachments: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -96,11 +101,15 @@ pub struct PrPatch {
     pub assignees_add: Vec<String>,
     pub assignees_remove: Vec<String>,
     pub milestone: Option<String>,
+    pub clear_milestone: bool,
+    pub projects_add: Vec<String>,
+    pub projects_remove: Vec<String>,
+    pub attachments: Vec<String>,
     pub expect_updated_at: Option<String>,
 }
 
 impl PrPatch {
-    /// True when no field would be written; `expect_updated_at` guards a write, it is not one.
+    /// True when no field would be written; `expect_updated_at` only guards a write.
     pub fn is_empty(&self) -> bool {
         self.title.is_none()
             && self.body.is_none()
@@ -112,6 +121,10 @@ impl PrPatch {
             && self.assignees_add.is_empty()
             && self.assignees_remove.is_empty()
             && self.milestone.is_none()
+            && !self.clear_milestone
+            && self.projects_add.is_empty()
+            && self.projects_remove.is_empty()
+            && self.attachments.is_empty()
     }
 }
 
@@ -151,6 +164,7 @@ impl MergeMethod {
 
 pub trait WorkItemProvider {
     fn authenticate(&self) -> Result<(), AppError>;
+    fn labels(&self) -> Result<Vec<crate::domain::RepositoryLabel>, AppError>;
     fn create(&self, issue: &NewIssue) -> Result<Issue, AppError>;
     fn list(&self, query: &IssueQuery) -> Result<Vec<IssueSummary>, AppError>;
     fn show(&self, number: u64) -> Result<Issue, AppError>;

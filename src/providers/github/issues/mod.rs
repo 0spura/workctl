@@ -3,9 +3,7 @@ mod read;
 mod write;
 
 use crate::domain::{AppError, Issue, IssueSummary};
-use crate::providers::{
-    IssuePatch, IssueQuery, NewIssue, WorkItemProvider, resolve_body_change,
-};
+use crate::providers::{IssuePatch, IssueQuery, NewIssue, WorkItemProvider, resolve_body_change};
 
 pub struct GitHubIssues {
     repo: String,
@@ -16,7 +14,11 @@ impl GitHubIssues {
         Self { repo }
     }
 
-    pub(super) fn run_gh(&self, args: &[String], input: Option<Vec<u8>>) -> Result<Vec<u8>, AppError> {
+    pub(super) fn run_gh(
+        &self,
+        args: &[String],
+        input: Option<Vec<u8>>,
+    ) -> Result<Vec<u8>, AppError> {
         super::run_gh(args, input)
     }
 }
@@ -24,6 +26,9 @@ impl GitHubIssues {
 impl WorkItemProvider for GitHubIssues {
     fn authenticate(&self) -> Result<(), AppError> {
         super::authenticate()
+    }
+    fn labels(&self) -> Result<Vec<crate::domain::RepositoryLabel>, AppError> {
+        read::labels(self)
     }
 
     fn create(&self, issue: &NewIssue) -> Result<Issue, AppError> {
@@ -53,12 +58,6 @@ impl WorkItemProvider for GitHubIssues {
             None => None,
             Some(change) => Some(resolve_body_change(&current.body, change)?),
         };
-        write::edit(
-            self,
-            number,
-            patch.title.as_deref(),
-            resolved.as_deref(),
-            &patch.attachments,
-        )
+        write::edit(self, number, patch, resolved.as_deref())
     }
 }

@@ -66,7 +66,11 @@ pub(super) fn show(provider: &GitHubPulls, number: u64) -> Result<PullRequest, A
     mapping::pull_request(&output.stdout)
 }
 
-pub(super) fn diff(provider: &GitHubPulls, number: u64, name_only: bool) -> Result<String, AppError> {
+pub(super) fn diff(
+    provider: &GitHubPulls,
+    number: u64,
+    name_only: bool,
+) -> Result<String, AppError> {
     let mut args = vec![
         "pr".to_owned(),
         "diff".to_owned(),

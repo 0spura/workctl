@@ -143,11 +143,7 @@ fn write_pull_request(
     writeln!(stdout).map_err(|_| AppError::output())
 }
 
-fn write_names(
-    stdout: &mut impl Write,
-    label: &str,
-    names: &[String],
-) -> Result<(), AppError> {
+fn write_names(stdout: &mut impl Write, label: &str, names: &[String]) -> Result<(), AppError> {
     if names.is_empty() {
         return Ok(());
     }
@@ -177,19 +173,14 @@ fn write_issue(stdout: &mut impl Write, issue: &Issue) -> Result<(), AppError> {
     writeln!(stdout).map_err(|_| AppError::output())
 }
 
-fn write_safe(
-    stdout: &mut impl Write,
-    value: &str,
-    preserve_layout: bool,
-) -> Result<(), AppError> {
+fn write_safe(stdout: &mut impl Write, value: &str, preserve_layout: bool) -> Result<(), AppError> {
     for character in value.chars() {
         if preserve_layout && matches!(character, '\n' | '\t') {
             stdout
                 .write_all(character.encode_utf8(&mut [0; 4]).as_bytes())
                 .map_err(|_| AppError::output())?;
         } else if character.is_control() {
-            write!(stdout, "\\u{{{:x}}}", character as u32)
-                .map_err(|_| AppError::output())?;
+            write!(stdout, "\\u{{{:x}}}", character as u32).map_err(|_| AppError::output())?;
         } else {
             stdout
                 .write_all(character.encode_utf8(&mut [0; 4]).as_bytes())
@@ -246,8 +237,7 @@ mod tests {
             updated_at: "2026-01-02T00:00:00Z".to_owned(),
         };
         let mut bytes = Vec::new();
-        write_to(&mut bytes, &SuccessOutput::Issues(vec![summary]))
-            .expect("render safe summary");
+        write_to(&mut bytes, &SuccessOutput::Issues(vec![summary])).expect("render safe summary");
         let rendered = String::from_utf8(bytes).expect("UTF-8 output");
         assert!(!rendered.contains('\u{1b}'));
         assert!(rendered.contains(r"List\u{1b}[2J"));

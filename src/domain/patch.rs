@@ -180,7 +180,9 @@ mod tests {
             "invalid_input"
         );
         assert_eq!(
-            apply(BODY, "@@ -3,1 +3,1 @@\n?nonsense\n").unwrap_err().code,
+            apply(BODY, "@@ -3,1 +3,1 @@\n?nonsense\n")
+                .unwrap_err()
+                .code,
             "invalid_input"
         );
     }

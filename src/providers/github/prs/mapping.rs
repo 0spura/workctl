@@ -93,14 +93,21 @@ pub fn pull_request(bytes: &[u8]) -> Result<PullRequest, AppError> {
         url: response.url,
         base_ref: response.base_ref_name,
         head_ref: response.head_ref_name,
-        author: response.author.map(|author| author.login).unwrap_or_default(),
+        author: response
+            .author
+            .map(|author| author.login)
+            .unwrap_or_default(),
         created_at: response.created_at,
         updated_at: response.updated_at,
         merged_at: non_empty(response.merged_at),
         mergeable: non_empty(response.mergeable).map(|value| value.to_ascii_lowercase()),
         review_decision: non_empty(response.review_decision)
             .map(|value| value.to_ascii_lowercase()),
-        labels: response.labels.into_iter().map(|label| label.name).collect(),
+        labels: response
+            .labels
+            .into_iter()
+            .map(|label| label.name)
+            .collect(),
         assignees: response
             .assignees
             .into_iter()
@@ -210,7 +217,10 @@ mod tests {
     #[test]
     fn rejects_missing_required_fields_and_unknown_states() {
         let missing_url = br#"{"number":12,"title":"Title","body":"","state":"OPEN","isDraft":false,"baseRefName":"main","headRefName":"feature","author":{"login":"octocat"},"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-02T00:00:00Z","mergedAt":"","mergeable":"UNKNOWN","reviewDecision":"","labels":[],"assignees":[]}"#;
-        assert_eq!(pull_request(missing_url).unwrap_err().code, "provider_response");
+        assert_eq!(
+            pull_request(missing_url).unwrap_err().code,
+            "provider_response"
+        );
 
         let unknown_state = br#"{"number":12,"title":"Title","body":"","state":"PENDING","isDraft":false,"url":"https://github.com/owner/repo/pull/12","baseRefName":"main","headRefName":"feature","author":{"login":"octocat"},"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-02T00:00:00Z","mergedAt":"","mergeable":"UNKNOWN","reviewDecision":"","labels":[],"assignees":[]}"#;
         assert_eq!(

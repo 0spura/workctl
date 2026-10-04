@@ -6,7 +6,7 @@ Developers and coding agents need a small local CLI for managing work items in t
 
 ## Vision
 
-`workctl` provides predictable, scriptable issue operations while leaving GitHub authentication to the official `gh` CLI. It infers the current repository from Git when possible, accepts explicit overrides, and reports machine-readable errors without exposing provider diagnostics.
+`workctl` provides predictable, scriptable issue operations while leaving authentication to the provider's official CLI (`gh`, `glab`). It infers the current repository and provider from Git when possible, accepts explicit overrides, and reports machine-readable errors without exposing provider diagnostics. Each provider keeps its own command grammar, mirroring that provider's CLI. Callers may explicitly opt into high-confidence automatic labels for GitHub issue create/edit; all explicit labels use the provider's native fields.
 
 ## Initial users and outcomes
 
@@ -16,7 +16,7 @@ Developers and coding agents need a small local CLI for managing work items in t
 
 ## v0 boundary
 
-The initial release supports GitHub issue create/list/show/edit, including list filters, attachment upload, and body edits that never require rewriting the whole body. It excludes issue deletion, GitLab, pull requests, projects and boards, comments, relationships, checklists, attachment management beyond upload, token handling, direct HTTP, and MCP transport. See the [SRS](../srs.md) for observable requirements and [architecture](../architecture.md) for implementation boundaries.
+The release supports GitHub issue and pull-request operations and GitLab issue reads, optional repository-native metadata, documented image/video attachments through `gh`, body edits that never require rewriting the whole body, and opt-in Jev automatic labels for GitHub issue create/edit. Those paths disclose the issue title/body and existing label catalog; create/edit apply only scores >= 0.8, and edits only add labels. Other commands and pull-request flows do not send content to Jev. Labels specified by the caller use the provider's native issue/PR fields. It excludes private attachment endpoints, project/board administration, issue deletion, Jira, comments, relationships, checklists, arbitrary HTTP integrations, generalized token management, and MCP transport. Metadata remains optional and follows repository conventions. See the [SRS](../srs.md) for observable behavior and [architecture](../architecture.md) for boundaries.
 
 ## Design principles
 

@@ -3,10 +3,16 @@
 > Product scope: [docs/product/vision.md](./product/vision.md)
 > Observable contract: [docs/srs.md](./srs.md)
 > Accepted cutover decision: [ADR-0004](./adr/0004-workctl-rust-cli.md)
-> Attachment and body-edit decision: [ADR-0005](./adr/0005-attachments-and-non-rewrite-body-edits.md)
+> Body-edit decision: [ADR-0005](./adr/0005-attachments-and-non-rewrite-body-edits.md)
 > Pull request decision: [ADR-0006](./adr/0006-pull-request-operations.md)
+> GitHub CLI metadata and attachment decision: [ADR-0008](./adr/0008-gh-native-metadata-and-attachments.md), superseding ADR-0007.
+> Jev label decision: [ADR-0009](./adr/0009-jev-label-suggestions.md), superseded by [ADR-0010](./adr/0010-automatic-issue-labels.md), [ADR-0011](./adr/0011-remove-issue-label-preview.md), and [ADR-0015](./adr/0015-provider-neutral-decision-model-package.md) (replacing the `--auto-labels` flag with the `@auto` label sentinel).
+> Milestone-selector decision: [ADR-0013](./adr/0013-explicit-current-milestone.md), superseding [ADR-0012](./adr/0012-default-current-milestone.md).
+> Decision-model adapter decision: [ADR-0015](./adr/0015-provider-neutral-decision-model-package.md), superseding the adapter contract in ADR-0014.
+> Command-verb decision: [ADR-0016](./adr/0016-gh-verb-parity.md), superseding the issue and pull request verb names in ADR-0004 and ADR-0006.
+> Grammar-selection decision: [ADR-0017](./adr/0017-provider-selected-cli-grammar.md), superseding ADR-0016's single-surface premise and `--provider` as a grammar selector.
 
-`workctl` is a local Rust CLI. The first vertical slice manages GitHub issues and pull requests; no MCP server or GitLab implementation ships in v0.
+`workctl` is a local Rust CLI. It manages GitHub issues and pull requests, and GitLab issues, by invoking the provider's own command-line tool. Each provider owns a static grammar that is selected before the arguments are parsed; no MCP server ships.
 
 ## Module map
 
@@ -14,36 +20,56 @@ Modules are grouped by ownership and reason to change. A module can grow while i
 
 ```text
 src/
-  main.rs                     bootstrap, error-to-exit mapping only
+  main.rs                     provider selection, bootstrap, error-to-exit mapping only
   cli/
-    mod.rs                    clap root command and global flags
-    common.rs                 body-change flags and limit parsing shared by issue and pr
-    issues.rs                 issue subcommand argument types
-    prs.rs                    pull request subcommand argument types
+    mod.rs                    neutral root command, global flags, and grammar selection
+    common.rs                 shared body-change flags, number and limit parsing, and nonblank value parser
+    github/
+      mod.rs                  the GitHub grammar enum
+      issues.rs               GitHub issue subcommand argument types
+      prs.rs                  GitHub pull request subcommand argument types
+    gitlab/
+      mod.rs                  the GitLab grammar enum
+      issues.rs               GitLab issue subcommand argument types
   commands/
-    mod.rs
-    issues.rs                 issue use cases: resolve context, call the provider, select output
-    prs.rs                    pull request use cases
-    support.rs                shared context resolution, text reading, body-change setup, argument validation
+    mod.rs                    dispatch by grammar provider
+    github/
+      mod.rs
+      issues.rs               GitHub issue use cases: resolve context, call the provider, select output
+      prs.rs                  GitHub pull request use cases
+    gitlab/
+      mod.rs
+      issues.rs               GitLab issue reads
+    support.rs                shared context resolution, text reading, and body-change setup
   config/
     mod.rs
     discover.rs               Git-root and origin-remote discovery
     files.rs                  strict JSON parse and shared/local merge
-    resolve.rs                provider and repository precedence
+    resolve.rs                grammar selection, provider and repository precedence
   domain/
     mod.rs
     body.rs                   append and section-replacement policy
     error.rs                  stable, safe user-facing errors
     issue.rs                  Issue and IssueSummary contracts
     pr.rs                     PullRequest, PullRequestSummary, PullRequestState, and CheckRun contracts
-    patch.rs                  strict unified-diff application
+    label.rs                  candidate repository labels and normalized model scores
+  decision_model/
+    mod.rs                    provider-neutral DecisionModel contract and adapter selection
+    jev_adapter.rs            Jev native System One protocol
+    laya_adapter.rs           Laya native System One protocol
+    gliner_decide_adapter.rs  loopback GLiNER2.5-Decide service client
+    glide_adapter.rs          Fastino GLiDE native System One protocol
+    llm_decision_adapter.rs   generic loopback OpenAI-compatible Chat Completions client
+    system_one.rs             shared typed-decision request and response validation
+  decision-model-server/
+    server.py                loopback-only local GLiNER2.5-Decide service
   process/
     mod.rs
     runner.rs                 argument-array subprocess execution, stdin, timeout, limits, bounded stdout/stderr
   providers/
     mod.rs                    WorkItemProvider and PullRequestProvider seams, request types, shared body-change resolver
     github/
-      mod.rs                  shared `gh` execution, authentication, and raw exit-status access
+      mod.rs                  shared `gh` execution, authentication, milestone-selector resolution, and raw exit-status access
       issues/
         mod.rs                GitHub issue provider composition
         read.rs               list/show
@@ -54,87 +80,137 @@ src/
         read.rs               list/show/diff/checks
         write.rs              create/edit/review/merge/ready/close/reopen
         mapping.rs            pull request and check-run validation and state normalization
+    gitlab/
+      mod.rs                  shared `glab` execution, authentication, and the pinned project URL
+      issues/
+        mod.rs                GitLab issue composition: reads only, so no write seam is implemented yet
+        read.rs               list/show
+        mapping.rs            response validation, `iid`/`description`/`opened` normalization
   output/
     mod.rs
     json.rs                   compact success and structured error JSON
     text.rs                   optional human-readable success output
 
 tests/
-  common/mod.rs               shared isolated `gh` fixture and CLI helpers
-  cli_issues.rs               built-binary issue provider-boundary behavior
-  cli_prs.rs                  built-binary pull request provider-boundary behavior
+  common/mod.rs               shared isolated `gh`/`glab` fixtures and CLI helpers
+  cli_issues.rs               built-binary GitHub issue provider-boundary behavior
+  cli_prs.rs                  built-binary GitHub pull request provider-boundary behavior
+  cli_gitlab.rs               built-binary GitLab provider-boundary behavior
   config.rs                   isolated config and Git-remote resolution
 ```
 
-No empty GitLab module is added. When GitLab is scheduled, its adapter must implement the existing issue and pull request seams with its own cohesive files and contract tests; it must not expand `main.rs` or the GitHub adapter.
+GitLab arrived as its own grammar and adapter rather than as an extension of the GitHub one. The GitLab issue adapter implements only the reads its grammar exposes; it does not implement `WorkItemProvider`, because create/edit have no GitLab verb yet and a seam method that always fails would be a stub. It joins that seam when `issue create`/`issue update` ship.
 
 ## Command flow
 
-1. Clap parses the `issue` and `pr` groups, global `--provider`, `--repo`, and `--format`.
-2. Help/version exit without external dependencies. Other commands load optional config from the Git worktree root.
-3. Context resolves provider and repository using command-line overrides, merged config, then Git origin host/repository.
-4. v0 rejects any provider except GitHub. A GitHub operation checks that `gh` is available and authenticated, then calls the GitHub adapter.
-5. The adapter invokes `gh issue list` for bounded, PR-free issue summaries and `gh pr list` for pull request summaries, passing the requested filters through as fixed flags. Issue create/get/patch use `gh api`; pull request operations use the `gh pr` commands (`create`, `view`, `edit`, `diff`, `checks`, `review`, `merge`, `ready`, `close`, `reopen`), mirroring `gh`'s own surface. Create/edit bodies travel on stdin. An issue operation carrying attachments switches to `gh issue create|edit --attach` with the body on stdin, because GitHub documents no attachment upload endpoint.
-6. Typed results are serialized by `output`; errors are mapped once to a safe JSON error on stderr and nonzero exit.
+1. The provider is selected before parsing: explicit `--provider`, merged config, then the Git origin host, falling back to GitHub when nothing resolves. Only the selected provider's grammar is attached to the root command, so the other provider's verbs and flags do not exist for clap to accept.
+2. Clap parses that grammar plus the global `--provider`, `--repo`, and `--format`.
+3. Help/version exit without external dependencies. Grammar selection is best-effort and cannot fail, so help is always available; the authoritative resolution runs when a command executes.
+4. Context resolves provider and repository using command-line overrides, merged config, then Git origin host/repository. A `--repo` host must match the resolved provider, an origin remote belonging to another provider fails closed, and `group/subgroup/project` is accepted only for GitLab.
+5. The selected provider checks its own CLI is available and authenticated — `gh auth status --hostname github.com` or `glab auth status --hostname gitlab.com` — then calls its adapter.
+6. Only issue create/edit with `@auto` in the existing label arguments selects a `DecisionModel`. It sends the proposed final title/description and candidate-label catalog only to the explicitly selected adapter, then appends scores >= 0.8 through the active code-host provider. Model configuration and hosted credentials are read only on this path. Edits classify final text and retain the timestamp guard.
+7. The GitHub adapter invokes `gh issue list` and `gh pr list` for bounded summaries, passing filters through as fixed flags. Issue reads use `gh api`; issue create/edit use `gh issue create|edit`; pull requests use `gh pr` commands. On issue/PR create/edit and `pr edit`, shared GitHub code resolves an explicit `--milestone @current` selector by querying open milestones and choosing the nearest due date today or later; a tie or no eligible milestone fails before the write instead of guessing. An omitted selector makes no request and leaves the field unset, other values pass through verbatim, list filters stay literal, and omission on an edit or update preserves the remote value. Typed optional metadata flags are forwarded directly to `gh`. Create/edit bodies…
+8. The GitLab adapter invokes `glab issue list` and `glab issue view` with `--output json` and the project as a full `https://gitlab.com/...` URL, so the host never depends on the working directory. The mapping turns `iid` into `number`, `description` into `body`, and `opened` into `open`, and rejects a malformed page instead of emitting a partial one. The GitLab grammar's `--closed`/`--all`/`--per-page` become `glab`'s own flags, which resolve `@me` and page for us.
+9. Typed results are serialized by `output`; errors are mapped once to a safe JSON error on stderr and nonzero exit.
+
+## Proposed private semantic declarations
+
+This is a proposed extension, not a current capability or an approved storage design. GitHub-native
+metadata remains the existing optional issue/PR fields described in [ADR-0008](./adr/0008-gh-native-metadata-and-attachments.md);
+a semantic declaration is separate and must never be forwarded to the provider.
+
+The issue-create use case would validate and persist a private intent before the remote write, then bind
+the declaration to the native issue ID only after that ID is observed. Intent, remote-create outcome,
+and internal association are distinct states: a provider timeout or lost response is uncertain, not proof
+that no issue exists. Never retry an uncertain create automatically or associate by title/body similarity.
+Failure to persist before create blocks the remote write; failure after a remote create leaves a pending
+association rather than permission to create again.
+
+The owning seam is a private durable-intent store invoked by the issue-create use case; it is not project
+configuration and does not alter `WorkItemProvider`'s provider-native issue contract. Stored declarations
+must not enter provider requests, process arguments, stdout, logs, or errors; storage and reads remain
+subject to local authorization. Input surface, store location/format, reconciliation flow, and
+post-create pending-state output are not selected. Resolve these choices and write the store threat model
+before implementation; no storage engine or new CLI flag is implied here.
 
 ## Configuration and context
 
 - Discover both config files at the Git worktree root on every command invocation, including when `--provider`/`--repo` override their values; never walk above the root.
 - Both files are strict JSON, regular non-symlink files capped at 64 KiB. The local file overrides `provider` and `workItemProvider` individually; unknown keys and malformed files fail closed.
-- Provider precedence: CLI `--provider`, local/shared `workItemProvider`, local/shared `provider`, then Git remote host.
-- Repository precedence: CLI `--repo OWNER/REPO`, then the Git `origin` remote.
-- `owner/repo` is validated before inclusion in any `gh` arguments or endpoint path. HTTPS and SCP-style SSH GitHub remotes are recognized; unknown hosts do not fall back.
+- Provider precedence: CLI `--provider`, local/shared `workItemProvider`, local/shared `provider`, then Git remote host. Grammar selection reads the same sources before parsing, best-effort and without a command tree; the authoritative resolution reports the real error.
+- Repository precedence: CLI `--repo [HOST/]OWNER[/...]/REPO`, then the Git `origin` remote.
+- The repository is validated before inclusion in any provider argument or endpoint path: GitHub accepts exactly `OWNER/REPO`, GitLab accepts `GROUP[/SUBGROUP...]/PROJECT`, and a leading host must belong to the resolved provider. HTTPS and SCP-style SSH GitHub and GitLab remotes are recognized; unknown hosts do not fall back, and an origin remote belonging to another provider than the selected one fails closed.
 - If no Git root exists, both explicit provider and repository are required. There is no persistent `repo` config pin.
 - Legacy `.mcp-tracker.json` files are neither read nor migrated.
 
 ## Provider seams and models
 
-`WorkItemProvider` owns issue create, list, show, and edit. The application/CLI layer receives normalized `Issue` or `IssueSummary`; GitHub numeric identifiers and provider response casing stay inside the GitHub adapter. `Issue.state` is `open|closed`; an issue summary excludes the body. The seam exists for the planned second provider, not for dynamic plugins or speculative providers.
+`WorkItemProvider` owns issue create, list, show, and edit. The application/CLI layer receives normalized `Issue` or `IssueSummary`; provider identifiers and response casing stay inside the provider adapter. `Issue.state` is `open|closed`; an issue summary excludes the body. The seam exists for the planned second provider, not for dynamic plugins or speculative providers. GitLab implements only the read half of the issue domain today, through its own type rather than this seam, because it has no create or update verb to implement; it joins the seam when those ship.
 
-`PullRequestProvider` is a second, narrow seam rather than an extension of `WorkItemProvider`. The two domains differ in nearly every operation — issues carry attachments and use a PATCH API, while pull requests add diff, checks, review, merge, ready, close, and reopen and normalize state to `open|closed|merged` — so widening the issue seam would force every provider and caller to carry capabilities neither needs. Each seam owns its request types: `NewPr`, `PrQuery`, `PrPatch`, plus `ReviewEvent` and `MergeMethod`. `PrPatch::is_empty` lets the caller reject an update that supplies only `expect_updated_at`, which guards a write rather than being one. The GitHub composition mirrors the issue adapter: `prs/mod.rs` wires the trait and `read.rs`/`write.rs`/`mapping.rs` split reads, writes, and validation.
+`PullRequestProvider` is a second, narrow seam rather than an extension of `WorkItemProvider`. The two domains differ in nearly every operation — issues use `gh issue create|edit`, while pull requests add diff, checks, review, merge, ready, close, and reopen and normalize state to `open|closed|merged` — so widening the issue seam would force every provider and caller to carry capabilities neither needs. Each seam owns its request types: `NewPr`, `PrQuery`, `PrPatch`, plus `ReviewEvent` and `MergeMethod`. `PrPatch::is_empty` rejects a mutationless update; its guard timestamp alone is not a write. The GitHub composition mirrors the issue adapter, splitting reads, writes, and validation.
 
-Requests cross a seam as typed values, not loose strings: `NewIssue`, `IssueQuery` (state, limit, labels, assignee, author, mention, milestone, search, type), and `IssuePatch` (title, `BodyChange`, attachments, expected `updated_at`). `BodyChange` names the mutation the caller wants — replace, append, replace a section, or apply a unified diff — so the caller never reproduces the current body. `pr update` reuses that exact set: the CLI flattens the same `BodyChangeArgs`, and `resolve_body_change` in `providers/mod.rs` applies it for both adapters, so body-shape policy (`domain/body.rs`, `domain/patch.rs`) stays on the domain side and only the request shape sits on the seam.
+Requests cross the issue and pull-request seams as typed values, not loose strings. The `DecisionModel` package is provider-neutral: it receives work-item title/description and candidate repository labels, and returns validated `{label, probability}` suggestions. Its adapters are Jev, Laya, GLiNER2.5-Decide, GLiDE, and generic local LLM; each keeps its own native HTTP contract behind the same interface. GitHub issue create/edit are current callers; the model package does not depend on GitHub response types, and another code-host provider can reuse it. Pull requests are outside this label-classification path.
 
-GitHub response JSON is deserialized into typed response structs and validated for required fields. A response carrying `pull_request` is rejected by issue show/edit. The `edit` operation behind `issue edit` and `pr update` fetches and validates the target exactly once, then applies the body change and sends the write, so a body mutation never sees stale text it did not read; the fetch is also where `--expect-updated-at` is checked, failing with `conflict` before any write. Issue list uses `gh issue list`, whose contract returns issues only; pull request list uses `gh pr list`, whose summaries never carry a body. Pull request show additionally normalizes the draft flag, `mergeable`, and `review_decision`, and checks are validated into typed `CheckRun` records.
+The adapter IDs are `jev-latest`, `laya`, `fastino/GLiNER2.5-Decide`, `fastino/GLiDE`, or `local/<model-id>`. Jev/Laya use native System One requests with Bearer authentication; GLiDE uses System One with `X-API-Key`. GLiNER-Decide uses the local service at `/v1/labels`. `LLMDecisionAdapter` uses OpenAI-compatible `/chat/completions` on loopback. Its generated numeric scores are model estimates, not calibrated probabilities; JSON mode constrains output shape only. Native model probabilities/confidence remain provider-native and need not be calibrated identically.
 
-Pull request `show` and `checks` depend on the `gh` exit status instead of collapsing it into a generic failure: `gh pr view` exits non-zero when the number is not a pull request, and `gh pr checks` exits non-zero for failing (1) or pending (8) checks while still printing a valid report, and writes `no checks reported` to stderr when there are none. The adapter therefore calls `run_gh_raw`, which returns the raw `ProcessOutput` rather than mapping a non-zero exit to `github_cli`; `show` maps that failure to `not_pull_request`, and `checks` parses stdout while treating the `no checks reported` stderr as an empty report. To make the status interpretable, `ProcessOutput` also carries a bounded `stderr`, so the adapter can read provider diagnostics that never reach a user-facing error.
+The generic local endpoint accepts any model served with OpenAI-compatible Chat Completions and JSON-object output. It is not a hosted OpenAI integration. The GLiNER service loads the official `fastino/GLiNER2.5-Decide` model locally. `DECISION_MODEL_BASE_URL` is restricted to loopback; hosted endpoints are fixed. Requests are bounded to 2 MiB, responses to 1 MiB, redirects are disabled, and failed/malformed scores fail closed. The existing threshold is >= 0.8; it is preserved for compatibility, not as a claim of cross-model calibration.
 
-Provider asymmetry is expected. Keep only genuinely shared behavior on each seam; expose provider-specific capabilities through typed, provider-scoped arguments or configuration and reject unsupported choices explicitly. Never pass arbitrary raw command arguments through. The issue-only capabilities are the GitHub `--attach` flag and the `--type` list filter; their names and validation live in the CLI, the seam carries them as typed fields, and a provider that cannot honor one must reject it rather than ignore it. Attachments are likewise issue-only: `NewPr` has no attachments field, so `pr create` cannot upload files and the pull request path never needs the `--attach` fallback.
 
-Attachment paths are caller-supplied command-line values, so the adapter follows symlinks and requires a regular file; the stricter regular-non-symlink rule belongs to repository content (config files), not to arguments a user typed. Only issue create/edit take attachments; `pr create` and `pr update` have no attachment flag, so the pull request path never touches the attachment machinery. Body text read from a file or stdin is capped at 1 MiB and must be valid UTF-8.
+Pull request `view` and `checks` depend on the `gh` exit status instead of collapsing it into a generic failure: `gh pr view` exits non-zero when the number is not a pull request, and `gh pr checks` exits non-zero for failing (1) or pending (8) checks while still printing a valid report, and writes `no checks reported` to stderr when there are none. The adapter therefore calls `run_gh_raw`, which returns the raw `ProcessOutput` rather than mapping a non-zero exit to `github_cli`; `view` maps that failure to `not_pull_request`, and `checks` parses stdout while treating the `no checks reported` stderr as an empty report. To make the status interpretable, `ProcessOutput` also carries a bounded `stderr`, so the adapter can read provider diagnostics that never reach a user-facing error.
 
-Patch application is exact-match and content-located: the line numbers in a hunk header are validated but not trusted, and unmatched context is a `patch_conflict` rather than a fuzzy placement. Both the issue and pull request adapters share this behavior through `resolve_body_change`. See [ADR-0005](./adr/0005-attachments-and-non-rewrite-body-edits.md).
+Provider asymmetry is expected. Keep only genuinely shared behavior on each seam; expose provider-specific capabilities through typed, provider-scoped arguments and reject unsupported choices explicitly. Never pass arbitrary raw command arguments through. Issue attachments use GitHub CLI 2.99.0 or newer; the version is checked only when an attachment is requested. GitHub CLI validates attachment types and performs uploads. Body text read from a file or stdin is capped at 1 MiB and must be valid UTF-8.
+
+Issue and pull-request create/edit map to documented code-host commands, including optional native metadata. Explicit labels remain caller-provided. Issue create/edit may opt into model classification by including `@auto` in `--label`/`--add-label`; the package appends labels scoring >= 0.8 while preserving existing and manual additions. `@auto` is reserved and rejected for label removal. No model call occurs without the sentinel; PRs remain outside this path. The issue adapter fetches the current item before classification, resolves final proposed text, and sets a timestamp guard to reject concurrent changes.
+
+The System One adapters ask one Noul question per candidate label because assignment is multi-valued; answers must match requested IDs/types and probabilities must be in [0,1]. Laya supports at most 32 questions and GLiDE at most 255; Jev supports at most 1,000 labels. The local GLiNER adapter obtains per-label confidence from its classifier service. The generic LLM adapter requests JSON-formatted estimated scores; those are not native calibrated probabilities. Every adapter validates a complete, unique response against the supplied label catalog.
+
+Native hosted adapters use `DECISION_MODEL_API_KEY` only when selected. Local adapters require no hosted key. The GLiNER server binds to `127.0.0.1` by default and accepts bounded JSON without logging request bodies. The generic local model endpoint must be loopback; it may target any local service implementing the supported OpenAI-compatible contract.
 
 Text output escapes terminal control characters in provider strings (titles, authors, labels, check names, and similar) while preserving body newlines and tabs; JSON output preserves the string data through JSON encoding.
 
 ## Process and security boundary
 
-- One process runner owns all `git` and `gh` process creation. It accepts an executable and argument vector; it never invokes a shell.
-- Request bodies are serialized JSON on stdin, not embedded in command text. Each output stream has an 8 MiB cap; one absolute 30-second deadline covers child completion and pipe/input workers, and a still-running direct child is killed on expiry.
-- `gh` owns GitHub credentials. `workctl` checks `gh auth status` but discards its output; it never reads token environment variables, stores credentials, or downloads dependencies.
-- Raw `gh` stderr, config contents, stack traces, and internal paths are not included in user-facing errors.
-- Invalid config and provider payloads fail closed; no fallback fabricates records or silently drops requested fields.
+- One process runner owns all `git`, `gh`, and `glab` process creation. It accepts an executable and argument vector; it never invokes a shell.
+- Create/edit bodies are passed on stdin as text to `gh`; GitHub API reads and `glab issue` reads use no request body. Each output stream has an 8 MiB cap; one absolute 30-second deadline covers child completion and pipe/input workers, and a still-running direct child is killed on expiry.
+
+- `gh` owns GitHub credentials and `glab` owns GitLab credentials. `workctl` checks `gh auth status` or `glab auth status` and discards the output.
+- Hosted model credentials use `DECISION_MODEL_API_KEY` only after `@auto` explicitly selects a hosted adapter; they are sent only to that adapter's fixed HTTPS endpoint. Local service URLs are rejected unless loopback.
+- Model requests contain only the proposed work-item title/description and candidate labels; credentials, comments, URLs, and unrelated code-host metadata are excluded.
+- Raw provider diagnostics, config contents, credentials, stack traces, and internal paths are not included in user-facing errors.
+- Invalid model configuration and provider payloads fail closed; no fallback fabricates records or silently drops requested scores.
 
 ## Failure behavior
 
 | Failure | Observable result | Recovery |
 |---|---|---|
+| Decision-model credential missing/blank | `decision_authentication`; no provider or model call | Set `DECISION_MODEL_API_KEY` for a hosted adapter |
+| Unsupported model ID or non-loopback local URL | `decision_config`; no model call | Select a supported adapter and keep local endpoints on loopback |
+| Model network failure, timeout, non-success status, or malformed scores | Safe `decision_model`/`decision_response`; no label write | Check the selected model service and its protocol |
+| More than 1,000 labels, or the selected adapter's question limit | `decision_input_limit`; model is not called | Reduce the repository label catalog |
+| Generic local LLM returns invalid, duplicate, missing, or out-of-range scores | `decision_response`; no label write | Use a compatible model/server response or choose a native decision adapter |
 | `gh` missing or unauthenticated | Safe `dependency`/`authentication` JSON error on stderr; nonzero exit | Install/authenticate `gh`, retry |
-| Git remote missing or unsupported | `context`/`provider_unsupported` JSON error; no `gh` call | Provide explicit supported `--provider` and `--repo` |
+| `glab` missing or unauthenticated | Safe `dependency`/`authentication` JSON error on stderr; nonzero exit | Install/authenticate `glab`, retry |
+| A verb or flag belonging to the other provider's grammar | clap usage error, exit 2, no provider call | Read the resolved provider's help (`workctl issue --help`) |
+| Attachments requested with `gh` older than 2.99.0 or an unparseable version | `dependency_version` JSON error before attachment write | Update `gh` through the user's package manager, or omit `--attach` |
+| Create with attachments exits nonzero | `attachment_create_uncertain`; the item may exist | Check GitHub before retrying |
+| Git remote missing, unsupported, or belonging to another provider than the selected one | `context`/`provider_unsupported` JSON error; no provider call | Pass explicit `--provider` and `--repo` for the intended host |
 | Invalid, oversized, linked, or non-regular config | `config` JSON error without path contents; overrides do not bypass validation | Correct/remove invalid config |
 | Invalid arguments or a non-positive number | `invalid_input` or a clap usage error; no remote call | Correct arguments |
+| `--milestone @current` with no eligible open milestone, or tied nearest due dates | `invalid_input` JSON error; no write | Pass an explicit `--milestone NAME` |
 | Body-change flags combined or incomplete | `invalid_input` JSON error; no `gh` call | Supply one body change and its companion argument |
 | Patch context absent from the current body | `patch_conflict` JSON error; no write | Regenerate the diff against the fetched body |
 | `--replace-section` heading not found | `section_not_found` JSON error; no write | Correct the heading to match the fetched body |
-| `--expect-updated-at` differs from the fetched issue or pull request | `conflict` JSON error; no write | Re-read with `issue show`/`pr show` and retry with the returned `updated_at` |
+| `--expect-updated-at` differs from the fetched issue or pull request | `conflict` JSON error; no write | Re-read with `issue view`/`pr view` and retry with the returned `updated_at` |
 | A number given to a pull request command is not a pull request | `not_pull_request` JSON error; no write | Use a pull request number, or the `issue` group for issues |
 | An issue command is given a pull request number | `not_issue` JSON error; no write | Use the issue number, or the `pr` group for pull requests |
-| Provider command failure | Generic `github_cli` JSON error; raw stderr withheld | Check `gh` authentication/permissions and retry |
+| GitHub command failure | Generic `github_cli` JSON error; raw stderr withheld | Check `gh` authentication/permissions and retry |
+| GitLab command failure | Generic `gitlab_cli` JSON error; raw stderr withheld | Check `glab` authentication/permissions and retry |
 | Child timeout/output cap exceeded | `timeout`/`output_limit` JSON error | Retry after resolving remote/tool issue |
 | Malformed provider response | `provider_response` JSON error | Report provider contract mismatch |
 
 ## Verification strategy
 
-- Unit tests cover strict config merge, Git remote parsing, provider selection, issue and pull request state mapping, request serialization, body mutation, and patch application.
-- Integration tests launch the compiled binary with a temporary `gh` fixture and verify observable stdout/stderr, exit status, request body safety, CRUD mapping, filter arguments, attachment routing, body-change payloads, concurrency-guard rejection, and bounds; `tests/cli_issues.rs` covers the issue surface and `tests/cli_prs.rs` the pull request surface, sharing one fixture in `tests/common/mod.rs`; no real GitHub issue or pull request is created or edited by tests.
+- Unit tests cover strict config merge, Git remote parsing, provider and grammar selection, GitHub and GitLab issue state mapping, `iid`/`description`/`opened` normalization, request serialization, body mutation, and patch application.
+- Decision-model unit tests use loopback HTTP fixtures to verify native request shapes and authentication headers (Bearer for Jev/Laya, `X-API-Key` for GLiDE), `noul` answer validation, candidate-coverage and score-range checks, loopback-only URL enforcement, and size/redirect behavior. The built-binary missing-credential test proves no code-host access or model call occurs without `@auto`.
+  - Integration tests launch the compiled binary with temporary `gh` and `glab` fixtures and verify observable stdout/stderr, exit status, body safety, CRUD mapping, filter and metadata arguments, attachment routing/version gating, body-change behavior, concurrency guards, bounds, and the `@auto` path against an OpenAI-compatible local fixture. The `glab` fixture also pins the exact argument vector, so the GitLab grammar's flag names stay the ones `glab` documents, and proves the GitLab grammar rejects GitHub verbs and flags before any provider call. No test creates or edits a real GitHub or GitLab issue or pull request, and no test calls a hosted model.
 - Release verification builds `workctl` and smoke-runs one success and one failure path against the isolated fixture.

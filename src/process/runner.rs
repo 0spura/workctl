@@ -1,8 +1,8 @@
 use std::io::{self, Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::thread;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use wait_timeout::ChildExt;
@@ -91,11 +91,8 @@ fn run_with_deadline(
         receiver
     });
 
-    let wait_result = remaining(started, deadline).and_then(|remaining| {
-        child
-            .wait_timeout(remaining)
-            .map_err(|_| ProcessError::Io)
-    });
+    let wait_result = remaining(started, deadline)
+        .and_then(|remaining| child.wait_timeout(remaining).map_err(|_| ProcessError::Io));
     let status = match wait_result {
         Ok(Some(status)) => status,
         Ok(None) | Err(ProcessError::Timeout) => {
@@ -180,14 +177,8 @@ mod tests {
     fn terminates_a_child_at_the_deadline() {
         let args = ["-c", "exec sleep 2"].map(str::to_owned);
         let start = Instant::now();
-        let error = run_with_deadline(
-            "sh",
-            &args,
-            None,
-            None,
-            Duration::from_millis(20),
-        )
-        .unwrap_err();
+        let error =
+            run_with_deadline("sh", &args, None, None, Duration::from_millis(20)).unwrap_err();
         assert!(matches!(error, ProcessError::Timeout));
         assert!(start.elapsed() < Duration::from_secs(1));
     }
@@ -196,14 +187,8 @@ mod tests {
     fn deadline_covers_readers_of_inherited_pipes() {
         let args = ["-c", "(sleep 0.25) & exit 0"].map(str::to_owned);
         let start = Instant::now();
-        let error = run_with_deadline(
-            "sh",
-            &args,
-            None,
-            None,
-            Duration::from_millis(20),
-        )
-        .unwrap_err();
+        let error =
+            run_with_deadline("sh", &args, None, None, Duration::from_millis(20)).unwrap_err();
         assert!(matches!(error, ProcessError::Timeout));
         assert!(start.elapsed() < Duration::from_secs(1));
     }
@@ -212,14 +197,8 @@ mod tests {
     fn rejects_captured_output_above_the_fixed_limit() {
         let byte_count = (MAX_CAPTURE_BYTES + 1).to_string();
         let args = ["-c".to_owned(), byte_count, "/dev/zero".to_owned()];
-        let error = run_with_deadline(
-            "head",
-            &args,
-            None,
-            None,
-            Duration::from_secs(5),
-        )
-        .unwrap_err();
+        let error =
+            run_with_deadline("head", &args, None, None, Duration::from_secs(5)).unwrap_err();
         assert!(matches!(error, ProcessError::OutputLimit));
     }
 
@@ -228,14 +207,7 @@ mod tests {
         let byte_count = (MAX_CAPTURE_BYTES + 1).to_string();
         let script = format!("head -c {byte_count} /dev/zero >&2");
         let args = ["-c".to_owned(), script];
-        let error = run_with_deadline(
-            "sh",
-            &args,
-            None,
-            None,
-            Duration::from_secs(5),
-        )
-        .unwrap_err();
+        let error = run_with_deadline("sh", &args, None, None, Duration::from_secs(5)).unwrap_err();
         assert!(matches!(error, ProcessError::OutputLimit));
     }
 }

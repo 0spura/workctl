@@ -1,9 +1,9 @@
 # 0006: Pull request operations in the CLI
 
-- Status: Accepted
+- Status: Superseded in part by [ADR-0008](./0008-gh-native-metadata-and-attachments.md)
 - Date: 2026-10-02
 - Tracker: none; the user authorized direct implementation in this repository.
-- Refines: [ADR-0004](./0004-workctl-rust-cli.md) and [ADR-0005](./0005-attachments-and-non-rewrite-body-edits.md). The `gh`-owned authentication, no-direct-HTTP, argument-array, stdin-payload, and bounded-process boundaries remain in force; this record adds a second capability surface and applies the body-edit policy to pull requests.
+- Refines: [ADR-0004](./0004-workctl-rust-cli.md) and [ADR-0005](./0005-attachments-and-non-rewrite-body-edits.md). Pull request operations and body-edit behavior remain; ADR-0008 adds optional metadata and documents attachment support in newer `gh`.
 
 ## Context
 
@@ -11,7 +11,7 @@ The retired MCP server exposed nine pull request tools (`create_branch`, `create
 
 Three provider facts bounded the design:
 
-- `gh` already implements every operation as a subcommand (`gh pr create|list|view|edit|diff|checks|review|merge|ready|close|reopen`), so the CLI wraps those instead of speaking REST or GraphQL directly. `gh pr create` has no `--attach` flag, and no subcommand submits inline review comments.
+- `gh` implements these operations as subcommands, so the CLI wraps them instead of speaking REST or GraphQL directly. The investigated local `gh` 2.87.3 lacks `--attach`; GitHub CLI 2.99.0 supports documented attachments (see ADR-0008). No subcommand submits inline review comments.
 - `gh pr checks` reports failing checks with exit status 1 and pending with 8 while still printing a valid report on stdout, and prints `no checks reported` on stderr when the pull request has none. `gh pr view` on a non-pull-request number exits non-zero. Both outcomes need the exit status and stderr, which the existing `run_gh` helper collapses into a generic failure.
 - `gh pr merge` requires a merge method and prompts interactively when none is given.
 

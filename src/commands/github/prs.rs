@@ -1,31 +1,22 @@
-use crate::cli::OutputFormat;
-use crate::cli::prs::{ListArgs, MergeMethodArg, PrAction, PrArgs, ReviewArgs};
-use crate::config::Provider;
+use crate::cli::GlobalArgs;
+use crate::cli::github::prs::{ListArgs, MergeMethodArg, PrAction, PrArgs, ReviewArgs};
 use crate::domain::AppError;
 use crate::output::{self, SuccessOutput};
 use crate::providers::github::prs::GitHubPulls;
-use crate::providers::{
-    MergeMethod, NewPr, PrPatch, PrQuery, PullRequestProvider, ReviewEvent,
-};
+use crate::providers::{MergeMethod, NewPr, PrPatch, PrQuery, PullRequestProvider, ReviewEvent};
 
-use super::support;
+use crate::commands::support;
 
-pub(super) fn execute(
-    explicit_provider: Option<Provider>,
-    explicit_repo: Option<&str>,
-    format: OutputFormat,
-    args: PrArgs,
-) -> Result<(), AppError> {
+pub(super) fn execute(globals: &GlobalArgs, args: PrArgs) -> Result<(), AppError> {
     let output = match args.action {
         PrAction::Create(args) => {
-            support::validate_title(&args.title)?;
             let body = support::optional_text(
                 args.body.as_deref(),
                 args.body_file.as_deref(),
                 "use either --body or --body-file",
             )?
             .unwrap_or_default();
-            let provider = provider(explicit_provider, explicit_repo)?;
+            let provider = provider(globals)?;
             SuccessOutput::PullRequest(provider.create(&NewPr {
                 title: args.title,
                 body,
@@ -33,26 +24,32 @@ pub(super) fn execute(
                 head: args.head,
                 draft: args.draft,
                 closes: args.closes,
+                assignees: args.assignees,
+                labels: args.labels,
+                reviewers: args.reviewers,
+                milestone: args.milestone,
+                projects: args.projects,
+                attachments: args.attachments,
             })?)
         }
         PrAction::List(args) => {
             let query = query(&args)?;
-            let provider = provider(explicit_provider, explicit_repo)?;
+            let provider = provider(globals)?;
             SuccessOutput::PullRequests(provider.list(&query)?)
         }
-        PrAction::Show { number } => {
-            let provider = provider(explicit_provider, explicit_repo)?;
+        PrAction::View { number } => {
+            let provider = provider(globals)?;
             SuccessOutput::PullRequest(provider.show(number.0)?)
         }
         PrAction::Diff(args) => {
-            let provider = provider(explicit_provider, explicit_repo)?;
+            let provider = provider(globals)?;
             SuccessOutput::Diff {
                 number: args.number.0,
                 diff: provider.diff(args.number.0, args.name_only)?,
             }
         }
         PrAction::Checks(args) => {
-            let provider = provider(explicit_provider, explicit_repo)?;
+            let provider = provider(globals)?;
             SuccessOutput::Checks(provider.checks(args.number.0, args.required)?)
         }
         PrAction::Review(args) => {
@@ -62,7 +59,7 @@ pub(super) fn execute(
                 args.body_file.as_deref(),
                 "use either --body or --body-file",
             )?;
-            let provider = provider(explicit_provider, explicit_repo)?;
+            let provider = provider(globals)?;
             provider.review(args.number.0, event, body.as_deref())?;
             SuccessOutput::Review {
                 number: args.number.0,
@@ -71,7 +68,7 @@ pub(super) fn execute(
         }
         PrAction::Merge(args) => {
             let method = args.method.map(merge_method);
-            let provider = provider(explicit_provider, explicit_repo)?;
+            let provider = provider(globals)?;
             provider.merge(args.number.0, method, args.delete_branch, args.auto)?;
             SuccessOutput::Merge {
                 number: args.number.0,
@@ -79,9 +76,11 @@ pub(super) fn execute(
                 auto: args.auto,
             }
         }
-        PrAction::Update(args) => {
-            if let Some(title) = args.title.as_deref() {
-                support::validate_title(title)?;
+        PrAction::Edit(args) => {
+            if args.clear_milestone && args.milestone.is_some() {
+                return Err(AppError::invalid_input(
+                    "--milestone and --clear-milestone cannot be used together",
+                ));
             }
             let change = support::body_change(&args.change)?;
             let patch = PrPatch {
@@ -95,18 +94,20 @@ pub(super) fn execute(
                 assignees_add: args.add_assignee,
                 assignees_remove: args.remove_assignee,
                 milestone: args.milestone,
+                clear_milestone: args.clear_milestone,
+                projects_add: args.projects_add,
+                projects_remove: args.projects_remove,
+                attachments: args.attachments,
                 expect_updated_at: args.expect_updated_at,
             };
             if patch.is_empty() {
-                return Err(AppError::invalid_input(
-                    "update requires --title, a body change, or another field to change",
-                ));
+                return Err(AppError::invalid_input("update requires a field to change"));
             }
-            let provider = provider(explicit_provider, explicit_repo)?;
+            let provider = provider(globals)?;
             SuccessOutput::PullRequest(provider.edit(args.number.0, &patch)?)
         }
         PrAction::Ready(args) => {
-            let provider = provider(explicit_provider, explicit_repo)?;
+            let provider = provider(globals)?;
             provider.set_ready(args.number.0, args.undo)?;
             SuccessOutput::Ready {
                 number: args.number.0,
@@ -114,7 +115,7 @@ pub(super) fn execute(
             }
         }
         PrAction::Close(args) => {
-            let provider = provider(explicit_provider, explicit_repo)?;
+            let provider = provider(globals)?;
             provider.close(args.number.0, args.comment.as_deref(), args.delete_branch)?;
             SuccessOutput::State {
                 number: args.number.0,
@@ -122,7 +123,7 @@ pub(super) fn execute(
             }
         }
         PrAction::Reopen(args) => {
-            let provider = provider(explicit_provider, explicit_repo)?;
+            let provider = provider(globals)?;
             provider.reopen(args.number.0, args.comment.as_deref())?;
             SuccessOutput::State {
                 number: args.number.0,
@@ -130,18 +131,10 @@ pub(super) fn execute(
             }
         }
     };
-    output::write(format, &output)
+    output::write(globals.format, &output)
 }
 
 fn query(args: &ListArgs) -> Result<PrQuery, AppError> {
-    support::validate_filters(&[
-        &args.assignee,
-        &args.author,
-        &args.base,
-        &args.head,
-        &args.search,
-    ])?;
-    support::validate_names(&args.labels, "label values must not be blank")?;
     Ok(PrQuery {
         state: args.state.as_str().to_owned(),
         limit: args.limit,
@@ -173,11 +166,8 @@ fn merge_method(method: MergeMethodArg) -> MergeMethod {
     }
 }
 
-fn provider(
-    explicit_provider: Option<Provider>,
-    explicit_repo: Option<&str>,
-) -> Result<GitHubPulls, AppError> {
-    let provider = GitHubPulls::new(support::resolve_repo(explicit_provider, explicit_repo)?);
+fn provider(globals: &GlobalArgs) -> Result<GitHubPulls, AppError> {
+    let provider = GitHubPulls::new(support::resolve_repo(globals.provider, globals.repo.as_deref())?);
     provider.authenticate()?;
     Ok(provider)
 }

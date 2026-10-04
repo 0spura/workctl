@@ -15,7 +15,11 @@ impl GitHubPulls {
         Self { repo }
     }
 
-    pub(super) fn run_gh(&self, args: &[String], input: Option<Vec<u8>>) -> Result<Vec<u8>, AppError> {
+    pub(super) fn run_gh(
+        &self,
+        args: &[String],
+        input: Option<Vec<u8>>,
+    ) -> Result<Vec<u8>, AppError> {
         super::run_gh(args, input)
     }
 

@@ -59,8 +59,8 @@ fn read_config(path: &Path) -> Result<Option<Vec<u8>>, AppError> {
         ));
     }
 
-    let file = open_config(path)
-        .map_err(|_| AppError::config("could not read project configuration"))?;
+    let file =
+        open_config(path).map_err(|_| AppError::config("could not read project configuration"))?;
     if !file
         .metadata()
         .map_err(|_| AppError::config("could not inspect project configuration"))?

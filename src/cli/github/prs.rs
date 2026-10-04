@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use clap::{ArgGroup, Args, Subcommand, ValueEnum};
 
-use super::common::{self, BodyChangeArgs};
+use crate::cli::common::{self, BodyChangeArgs};
 
 #[derive(Debug, Args)]
 #[command(
@@ -12,7 +12,7 @@ workctl pr list --state open --label bug\n  \
 workctl pr diff 42 --name-only\n  \
 workctl pr review 42 --request-changes --body \"Missing test\"\n  \
 workctl pr merge 42 --method squash --delete-branch\n\n\
-A body edit never requires rewriting the whole body; see `workctl pr update --help`."
+A body edit never requires rewriting the whole body; see `workctl pr edit --help`."
 )]
 pub struct PrArgs {
     #[command(subcommand)]
@@ -25,8 +25,8 @@ pub enum PrAction {
     Create(CreateArgs),
     /// List pull request summaries (never bodies)
     List(ListArgs),
-    /// Show one pull request with its body
-    Show {
+    /// View one pull request with its body
+    View {
         /// Pull request number
         number: PrNumber,
     },
@@ -38,8 +38,8 @@ pub enum PrAction {
     Review(ReviewArgs),
     /// Merge a pull request
     Merge(MergeArgs),
-    /// Update a pull request title, body, base, labels, reviewers, or assignees
-    Update(UpdateArgs),
+    /// Edit a pull request title, body, base, labels, reviewers, or assignees
+    Edit(EditArgs),
     /// Mark a pull request ready for review, or back to draft
     Ready(ReadyArgs),
     /// Close a pull request
@@ -51,7 +51,7 @@ pub enum PrAction {
 #[derive(Debug, Args)]
 pub struct CreateArgs {
     /// Pull request title; must not be blank
-    #[arg(long)]
+    #[arg(long, value_parser = common::parse_non_blank)]
     pub title: String,
     /// Pull request body text
     #[arg(long)]
@@ -71,11 +71,32 @@ pub struct CreateArgs {
     /// Issue closed when the pull request merges; may be repeated
     #[arg(long = "closes", value_name = "NUMBER", value_parser = clap::value_parser!(u64).range(1..))]
     pub closes: Vec<u64>,
+    /// Add an assignee; may be repeated
+    #[arg(long = "assignee", value_name = "LOGIN", value_parser = common::parse_non_blank)]
+    pub assignees: Vec<String>,
+    /// Add a label; may be repeated
+    #[arg(long = "label", value_name = "NAME", value_parser = common::parse_non_blank)]
+    pub labels: Vec<String>,
+    /// Request a review from a login; may be repeated
+    #[arg(long = "reviewer", value_name = "LOGIN", value_parser = common::parse_non_blank)]
+    pub reviewers: Vec<String>,
+    /// Set the milestone by name, or `@current` for the nearest open milestone
+    /// due today or later
+    #[arg(long, value_parser = common::parse_non_blank)]
+    pub milestone: Option<String>,
+    /// Add to a project; may be repeated
+    #[arg(long = "project", value_name = "TITLE", value_parser = common::parse_non_blank)]
+    pub projects: Vec<String>,
+    /// Attach an image or video; may be repeated, optionally as FILE#ALT
+    #[arg(long = "attach", value_name = "FILE[#ALT]")]
+    pub attachments: Vec<String>,
 }
 
 #[derive(Debug, Args)]
-#[command(after_help = "Filters pass straight to `gh pr list`. All of them are optional and combine:\n  \
-workctl pr list --state merged --author me --search \"in:title workctl\"")]
+#[command(
+    after_help = "Filters pass straight to `gh pr list`. All of them are optional and combine:\n  \
+workctl pr list --state merged --author me --search \"in:title workctl\""
+)]
 pub struct ListArgs {
     /// Pull request state to list
     #[arg(long, value_enum, default_value = "open")]
@@ -84,22 +105,22 @@ pub struct ListArgs {
     #[arg(long, default_value_t = 30, value_parser = common::parse_limit)]
     pub limit: usize,
     /// Filter by label; may be repeated
-    #[arg(long = "label", value_name = "NAME")]
+    #[arg(long = "label", value_name = "NAME", value_parser = common::parse_non_blank)]
     pub labels: Vec<String>,
     /// Filter by assignee login
-    #[arg(long)]
+    #[arg(long, value_parser = common::parse_non_blank)]
     pub assignee: Option<String>,
     /// Filter by author login
-    #[arg(long)]
+    #[arg(long, value_parser = common::parse_non_blank)]
     pub author: Option<String>,
     /// Filter by base branch
-    #[arg(long)]
+    #[arg(long, value_parser = common::parse_non_blank)]
     pub base: Option<String>,
     /// Filter by head branch
-    #[arg(long)]
+    #[arg(long, value_parser = common::parse_non_blank)]
     pub head: Option<String>,
     /// GitHub search query
-    #[arg(long)]
+    #[arg(long, value_parser = common::parse_non_blank)]
     pub search: Option<String>,
     /// Filter by draft state
     #[arg(long)]
@@ -147,8 +168,10 @@ pub struct ReviewArgs {
 }
 
 #[derive(Debug, Args)]
-#[command(after_help = "`gh pr merge` needs a merge method, and workctl passes none unless you give\n\
---method, so an explicit method is required whenever gh cannot infer one.")]
+#[command(
+    after_help = "`gh pr merge` needs a merge method, and workctl passes none unless you give\n\
+--method, so an explicit method is required whenever gh cannot infer one."
+)]
 pub struct MergeArgs {
     /// Pull request number
     pub number: PrNumber,
@@ -164,15 +187,17 @@ pub struct MergeArgs {
 }
 
 #[derive(Debug, Args)]
-#[command(after_help = "Body changes: pick at most one of --body, --append-body, --replace-section, or\n\
+#[command(
+    after_help = "Body changes: pick at most one of --body, --append-body, --replace-section, or\n\
 --patch-file. The pull request is fetched once, the change is applied to that text, and one write\n\
-is sent. Pass the updated_at from `workctl pr show <NUMBER>` as --expect-updated-at to refuse the\n\
-write if the pull request changed meanwhile.")]
-pub struct UpdateArgs {
+is sent. Pass the updated_at from `workctl pr view <NUMBER>` as --expect-updated-at to refuse the\n\
+write if the pull request changed meanwhile."
+)]
+pub struct EditArgs {
     /// Pull request number
     pub number: PrNumber,
     /// New title; must not be blank
-    #[arg(long)]
+    #[arg(long, value_parser = common::parse_non_blank)]
     pub title: Option<String>,
     #[command(flatten)]
     pub change: BodyChangeArgs,
@@ -180,26 +205,39 @@ pub struct UpdateArgs {
     #[arg(long)]
     pub base: Option<String>,
     /// Add a label; may be repeated
-    #[arg(long = "add-label", value_name = "NAME")]
+    #[arg(long = "add-label", value_name = "NAME", value_parser = common::parse_non_blank)]
     pub add_label: Vec<String>,
     /// Remove a label; may be repeated
-    #[arg(long = "remove-label", value_name = "NAME")]
+    #[arg(long = "remove-label", value_name = "NAME", value_parser = common::parse_non_blank)]
     pub remove_label: Vec<String>,
     /// Request a review from a login; may be repeated
-    #[arg(long = "add-reviewer", value_name = "LOGIN")]
+    #[arg(long = "add-reviewer", value_name = "LOGIN", value_parser = common::parse_non_blank)]
     pub add_reviewer: Vec<String>,
     /// Remove a review request; may be repeated
-    #[arg(long = "remove-reviewer", value_name = "LOGIN")]
+    #[arg(long = "remove-reviewer", value_name = "LOGIN", value_parser = common::parse_non_blank)]
     pub remove_reviewer: Vec<String>,
     /// Add an assignee; may be repeated
-    #[arg(long = "add-assignee", value_name = "LOGIN")]
+    #[arg(long = "add-assignee", value_name = "LOGIN", value_parser = common::parse_non_blank)]
     pub add_assignee: Vec<String>,
     /// Remove an assignee; may be repeated
-    #[arg(long = "remove-assignee", value_name = "LOGIN")]
+    #[arg(long = "remove-assignee", value_name = "LOGIN", value_parser = common::parse_non_blank)]
     pub remove_assignee: Vec<String>,
-    /// Set the milestone by name
-    #[arg(long)]
+    /// Set the milestone by name, or `@current` for the nearest open milestone
+    /// due today or later
+    #[arg(long, value_parser = common::parse_non_blank)]
     pub milestone: Option<String>,
+    /// Remove the current milestone
+    #[arg(long)]
+    pub clear_milestone: bool,
+    /// Add to a project; may be repeated
+    #[arg(long = "add-project", value_name = "TITLE", value_parser = common::parse_non_blank)]
+    pub projects_add: Vec<String>,
+    /// Remove from a project; may be repeated
+    #[arg(long = "remove-project", value_name = "TITLE", value_parser = common::parse_non_blank)]
+    pub projects_remove: Vec<String>,
+    /// Attach an image or video; may be repeated, optionally as FILE#ALT
+    #[arg(long = "attach", value_name = "FILE[#ALT]")]
+    pub attachments: Vec<String>,
     /// Refuse the write unless the pull request's updated_at matches this value
     #[arg(long = "expect-updated-at", value_name = "TIMESTAMP")]
     pub expect_updated_at: Option<String>,

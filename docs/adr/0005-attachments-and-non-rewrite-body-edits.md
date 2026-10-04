@@ -1,9 +1,9 @@
 # 0005: Attachment upload and non-rewrite body edits
 
-- Status: Accepted
+- Status: Superseded in part by [ADR-0008](./0008-gh-native-metadata-and-attachments.md)
 - Date: 2026-10-02
 - Tracker: none; the user authorized direct implementation in this repository.
-- Refines: [ADR-0004](./0004-workctl-rust-cli.md). The `gh`-owned authentication, no-direct-HTTP, argument-array, and stdin-payload boundaries remain in force; this record adds capability surface and one additional `gh` integration path.
+- Refines: [ADR-0004](./0004-workctl-rust-cli.md). Its body-edit, patch, and concurrency decisions remain in force; the attachment/write-path decisions were superseded by ADR-0008.
 
 ## Context
 

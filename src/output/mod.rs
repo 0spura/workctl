@@ -1,12 +1,10 @@
 pub mod json;
 pub mod text;
+use crate::cli::OutputFormat;
 
 use serde::Serialize;
 
-use crate::cli::OutputFormat;
-use crate::domain::{
-    AppError, CheckRun, Issue, IssueSummary, PullRequest, PullRequestSummary,
-};
+use crate::domain::{AppError, CheckRun, Issue, IssueSummary, PullRequest, PullRequestSummary};
 
 #[derive(Serialize)]
 #[serde(untagged)]

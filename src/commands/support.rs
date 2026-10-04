@@ -39,7 +39,10 @@ pub(super) fn body_change(args: &BodyChangeArgs) -> Result<Option<BodyChange>, A
         ));
     }
     if args.replace_section.is_some() {
-        let text = match (args.section_body.as_deref(), args.section_body_file.as_deref()) {
+        let text = match (
+            args.section_body.as_deref(),
+            args.section_body_file.as_deref(),
+        ) {
             (Some(_), Some(_)) => {
                 return Err(AppError::invalid_input(
                     "use either --section-body or --section-body-file",
@@ -117,33 +120,6 @@ fn decode(bytes: Vec<u8>) -> Result<String, AppError> {
     String::from_utf8(bytes).map_err(|_| AppError::invalid_input("body text must be valid UTF-8"))
 }
 
-pub(super) fn validate_title(title: &str) -> Result<(), AppError> {
-    if title.trim().is_empty() {
-        Err(AppError::invalid_input("title must not be blank"))
-    } else {
-        Ok(())
-    }
-}
-
-/// Rejects blank filter values before they reach the provider.
-pub(super) fn validate_filters(values: &[&Option<String>]) -> Result<(), AppError> {
-    for value in values {
-        if value.as_deref().is_some_and(|value| value.trim().is_empty()) {
-            return Err(AppError::invalid_input("filter values must not be blank"));
-        }
-    }
-    Ok(())
-}
-
-/// Rejects blank names before they reach the provider.
-pub(super) fn validate_names(values: &[String], message: &'static str) -> Result<(), AppError> {
-    for value in values {
-        if value.trim().is_empty() {
-            return Err(AppError::invalid_input(message));
-        }
-    }
-    Ok(())
-}
 
 /// Resolves the repository selected by the provider flags and the current directory.
 pub(super) fn resolve_repo(

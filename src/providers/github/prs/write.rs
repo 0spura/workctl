@@ -1,10 +1,12 @@
 use crate::domain::{AppError, PullRequest, body};
 use crate::providers::github::prs::{GitHubPulls, read};
-use crate::providers::{
-    MergeMethod, NewPr, PrPatch, ReviewEvent, resolve_body_change,
-};
+use crate::providers::{MergeMethod, NewPr, PrPatch, ReviewEvent, resolve_body_change};
 
 pub(super) fn create(provider: &GitHubPulls, pr: &NewPr) -> Result<PullRequest, AppError> {
+    if !pr.attachments.is_empty() {
+        super::super::require_attachment_support()?;
+    }
+    let milestone = super::super::resolve_milestone(&provider.repo, pr.milestone.as_deref())?;
     let body = if pr.closes.is_empty() {
         pr.body.clone()
     } else {
@@ -28,18 +30,37 @@ pub(super) fn create(provider: &GitHubPulls, pr: &NewPr) -> Result<PullRequest, 
         "-".to_owned(),
     ];
     if let Some(base) = &pr.base {
-        args.push("--base".to_owned());
-        args.push(base.clone());
+        args.extend(["--base".to_owned(), base.clone()]);
     }
     if let Some(head) = &pr.head {
-        args.push("--head".to_owned());
-        args.push(head.clone());
+        args.extend(["--head".to_owned(), head.clone()]);
     }
     if pr.draft {
         args.push("--draft".to_owned());
     }
-    let output = provider.run_gh(&args, Some(body.into_bytes()))?;
-    read::show(provider, parse_pr_number(&output)?)
+    push_repeated(&mut args, "--assignee", &pr.assignees);
+    push_repeated(&mut args, "--label", &pr.labels);
+    push_repeated(&mut args, "--reviewer", &pr.reviewers);
+    if let Some(milestone) = milestone {
+        args.extend(["--milestone".to_owned(), milestone]);
+    }
+    push_repeated(&mut args, "--project", &pr.projects);
+    push_repeated(&mut args, "--attach", &pr.attachments);
+    let output = super::super::run_gh_raw(&args, Some(body.into_bytes())).map_err(|_| {
+        if pr.attachments.is_empty() {
+            AppError::github_cli()
+        } else {
+            AppError::attachment_create_uncertain()
+        }
+    })?;
+    if !output.success {
+        return Err(if pr.attachments.is_empty() {
+            AppError::github_cli()
+        } else {
+            AppError::attachment_create_uncertain()
+        });
+    }
+    read::show(provider, parse_pr_number(&output.stdout)?)
 }
 
 pub(super) fn edit(
@@ -47,6 +68,9 @@ pub(super) fn edit(
     number: u64,
     patch: &PrPatch,
 ) -> Result<PullRequest, AppError> {
+    if !patch.attachments.is_empty() {
+        super::super::require_attachment_support()?;
+    }
     let current = read::show(provider, number)?;
     if let Some(expected) = patch.expect_updated_at.as_deref() {
         if current.updated_at != expected {
@@ -62,6 +86,7 @@ pub(super) fn edit(
         return Ok(current);
     }
 
+    let milestone = super::super::resolve_milestone(&provider.repo, patch.milestone.as_deref())?;
     let mut args = vec![
         "pr".to_owned(),
         "edit".to_owned(),
@@ -70,16 +95,13 @@ pub(super) fn edit(
         provider.repo.clone(),
     ];
     if let Some(title) = &patch.title {
-        args.push("--title".to_owned());
-        args.push(title.clone());
+        args.extend(["--title".to_owned(), title.clone()]);
     }
     if body.is_some() {
-        args.push("--body-file".to_owned());
-        args.push("-".to_owned());
+        args.extend(["--body-file".to_owned(), "-".to_owned()]);
     }
     if let Some(base) = &patch.base {
-        args.push("--base".to_owned());
-        args.push(base.clone());
+        args.extend(["--base".to_owned(), base.clone()]);
     }
     push_repeated(&mut args, "--add-label", &patch.labels_add);
     push_repeated(&mut args, "--remove-label", &patch.labels_remove);
@@ -87,10 +109,14 @@ pub(super) fn edit(
     push_repeated(&mut args, "--remove-reviewer", &patch.reviewers_remove);
     push_repeated(&mut args, "--add-assignee", &patch.assignees_add);
     push_repeated(&mut args, "--remove-assignee", &patch.assignees_remove);
-    if let Some(milestone) = &patch.milestone {
-        args.push("--milestone".to_owned());
-        args.push(milestone.clone());
+    if let Some(milestone) = milestone {
+        args.extend(["--milestone".to_owned(), milestone]);
+    } else if patch.clear_milestone {
+        args.push("--remove-milestone".to_owned());
     }
+    push_repeated(&mut args, "--add-project", &patch.projects_add);
+    push_repeated(&mut args, "--remove-project", &patch.projects_remove);
+    push_repeated(&mut args, "--attach", &patch.attachments);
     provider.run_gh(&args, body.map(String::into_bytes))?;
     read::show(provider, number)
 }
@@ -149,11 +175,7 @@ pub(super) fn merge(
     Ok(())
 }
 
-pub(super) fn set_ready(
-    provider: &GitHubPulls,
-    number: u64,
-    draft: bool,
-) -> Result<(), AppError> {
+pub(super) fn set_ready(provider: &GitHubPulls, number: u64, draft: bool) -> Result<(), AppError> {
     let mut args = vec![
         "pr".to_owned(),
         "ready".to_owned(),
@@ -219,12 +241,16 @@ fn push_repeated(args: &mut Vec<String>, flag: &str, values: &[String]) {
     }
 }
 
-/// Whether the patch requests any mutation; `expect_updated_at` only guards concurrency.
+/// Whether the patch requests any mutation; `expect_updated_at` only guards a write.
 fn has_field(patch: &PrPatch, has_body: bool) -> bool {
     has_body
         || patch.title.is_some()
         || patch.base.is_some()
         || patch.milestone.is_some()
+        || patch.clear_milestone
+        || !patch.projects_add.is_empty()
+        || !patch.projects_remove.is_empty()
+        || !patch.attachments.is_empty()
         || !patch.labels_add.is_empty()
         || !patch.labels_remove.is_empty()
         || !patch.reviewers_add.is_empty()
