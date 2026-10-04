@@ -89,7 +89,7 @@ pub fn resolve_context(
         None => remote
             .map(|remote| remote.repo)
             .ok_or(AppError::context(
-                "could not determine a repository; specify --repo OWNER/REPO",
+                "could not determine a repository; specify --repo",
             ))?,
     };
     Ok(ResolvedContext { repo })

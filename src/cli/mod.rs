@@ -14,7 +14,7 @@ pub struct GlobalArgs {
     /// Work-item provider; defaults to the Git origin host
     #[arg(long, global = true, value_enum)]
     pub provider: Option<Provider>,
-    /// Repository as OWNER/REPO, or HOST/OWNER/REPO; defaults to the Git origin remote
+    /// Repository as OWNER/REPO or HOST/OWNER/REPO; GitLab also accepts GROUP/SUBGROUP/PROJECT
     #[arg(long, global = true, value_name = "REPO")]
     pub repo: Option<String>,
     /// Success output format
