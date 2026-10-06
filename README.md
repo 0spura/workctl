@@ -78,16 +78,22 @@ The first model load may download weights. The service binds to `127.0.0.1` by d
 GitLab resolves to a different grammar whose verbs and flags mirror `glab`, so GitHub spellings such as `--state` and `--limit` are usage errors rather than silently accepted. The resolved provider decides which grammar exists; `--help` shows the active one.
 
 ```sh
+workctl issue create --title "Unexpected crash" --description-file description.md \
+  --label bug --assignee alice --milestone "1.0" --weight 2 --due-date 2026-11-30
+workctl issue update 12 --title "Crash on startup" --label triage --unlabel needs-info
+workctl issue update 12 --assignee=+alice --assignee=-bob --milestone "" --public
 workctl issue list --all
 workctl issue list --closed --label bug
 workctl issue list --assignee @me --search crash --per-page 50
 workctl issue view 12
 ```
 
+- `issue create` requires `--title` and either `--description TEXT` or `--description-file FILE`; `--description-file -` reads stdin. Description bytes are sent to `glab` on stdin, not exposed in process arguments; a description consisting only of `-` is rejected because `glab` reserves it for editor behavior. Supported metadata: repeatable `--label` and plain `--assignee`, `--milestone`, `--confidential`, `--weight` (including zero), and `--due-date YYYY-MM-DD`. `glab issue create` omits weight zero, so workctl sets it with a follow-up `glab issue update`.
+- `issue update NUMBER` accepts any nonempty combination of `--title`, `--description`/`--description-file`, `--label`, `--unlabel`, `--assignee`, `--unassign`, `--milestone`, `--confidential`/`--public`, `--weight`, and `--due-date`. Empty description replacement is rejected. Assignee `+`/`-` prefixes add/remove usernames; milestone empty string or `0` clears it.
 - `issue list` filters: `--closed` (closed only), `--all` (every state; mutually exclusive with `--closed`), `--label NAME` (repeatable), `--assignee USERNAME|@me`, `--author USERNAME|@me`, `--milestone VALUE`, `--search TEXT`, and `--per-page N` (1 through 100, default 30). The default state is open.
 - `issue view NUMBER` takes the GitLab IID.
-- Output uses the same shapes as GitHub: `issue list` returns summaries without bodies, and `issue view` returns `{"number", "title", "body", "state", "url", "created_at", "updated_at"}` with the GitLab `iid` mapped to `number`, `description` to `body`, and the `opened` state to `open`. GitLab-only fields such as `confidential`, `weight`, and `due_date` are not part of the record.
-- `issue create`, `issue update`, and the `mr` group are not implemented yet. Typing `pr` fails with an error naming `mr`, since that is GitLab's name for merge requests.
+- Output uses the same shapes as GitHub: `issue list` returns summaries without bodies, and `issue view`, `issue create`, and `issue update` return `{"number", "title", "body", "state", "url", "created_at", "updated_at"}` with the GitLab `iid` mapped to `number`, `description` to `body`, and `opened` state to `open`. GitLab-only fields such as `confidential`, `weight`, and `due_date` are not part of the shared record.
+- If the write succeeds but its result cannot be confirmed, `gitlab_write_uncertain` asks you to check the issue before retrying. GitLab `mr` is not implemented yet. Typing `pr` fails with an error naming `mr`, GitLab's merge-request group.
 
 ## Editing without rewriting the body
 

@@ -83,8 +83,9 @@ src/
     gitlab/
       mod.rs                  shared `glab` execution, authentication, and the pinned project URL
       issues/
-        mod.rs                GitLab issue composition: reads only, so no write seam is implemented yet
+        mod.rs                GitLab issue composition and provider-native create/update requests
         read.rs               list/show
+        write.rs              create/update and safe post-write confirmation
         mapping.rs            response validation, `iid`/`description`/`opened` normalization
   output/
     mod.rs
@@ -99,7 +100,7 @@ tests/
   config.rs                   isolated config and Git-remote resolution
 ```
 
-GitLab arrived as its own grammar and adapter rather than as an extension of the GitHub one. The GitLab issue adapter implements only the reads its grammar exposes; it does not implement `WorkItemProvider`, because create/edit have no GitLab verb yet and a seam method that always fails would be a stub. It joins that seam when `issue create`/`issue update` ship.
+GitLab has its own grammar and adapter rather than extending the GitHub one. GitLab issue writes stay provider-owned because their native flags and mutation semantics differ from GitHub's; the adapter returns the shared `Issue` record without widening `WorkItemProvider` or passing provider-specific requests through generic request types.
 
 ## Command flow
 
@@ -110,7 +111,7 @@ GitLab arrived as its own grammar and adapter rather than as an extension of the
 5. The selected provider checks its own CLI is available and authenticated — `gh auth status --hostname github.com` or `glab auth status --hostname gitlab.com` — then calls its adapter.
 6. Only issue create/edit with `@auto` in the existing label arguments selects a `DecisionModel`. It sends the proposed final title/description and candidate-label catalog only to the explicitly selected adapter, then appends scores >= 0.8 through the active code-host provider. Model configuration and hosted credentials are read only on this path. Edits classify final text and retain the timestamp guard.
 7. The GitHub adapter invokes `gh issue list` and `gh pr list` for bounded summaries, passing filters through as fixed flags. Issue reads use `gh api`; issue create/edit use `gh issue create|edit`; pull requests use `gh pr` commands. On issue/PR create/edit and `pr edit`, shared GitHub code resolves an explicit `--milestone @current` selector by querying open milestones and choosing the nearest due date today or later; a tie or no eligible milestone fails before the write instead of guessing. An omitted selector makes no request and leaves the field unset, other values pass through verbatim, list filters stay literal, and omission on an edit or update preserves the remote value. Typed optional metadata flags are forwarded directly to `gh`. Create/edit bodies…
-8. The GitLab adapter invokes `glab issue list` and `glab issue view` with `--output json` and the project as a full `https://gitlab.com/...` URL, so the host never depends on the working directory. The mapping turns `iid` into `number`, `description` into `body`, and `opened` into `open`, and rejects a malformed page instead of emitting a partial one. The GitLab grammar's `--closed`/`--all`/`--per-page` become `glab`'s own flags, which resolve `@me` and page for us.
+8. The GitLab adapter invokes `glab issue list`, `view`, `create`, and `update` with the project as a full `https://gitlab.com/...` URL. Reads and post-write confirmation use `--output json`; create validates the emitted issue URL and obtains the shared result with `issue view`. Native GitLab write fields remain typed on the GitLab adapter. Description content travels on stdin; empty update descriptions and dash-only descriptions are rejected before provider access. Since `glab issue create` omits `--weight=0`, an explicit zero is applied with a follow-up `glab issue update --weight=0`. The mapping turns `iid` into `number`, `description` into `body`, and `opened` into `open`, and rejects malformed responses instead of emitting partial records.
 9. Typed results are serialized by `output`; errors are mapped once to a safe JSON error on stderr and nonzero exit.
 
 ## Proposed private semantic declarations
@@ -145,7 +146,7 @@ before implementation; no storage engine or new CLI flag is implied here.
 
 ## Provider seams and models
 
-`WorkItemProvider` owns issue create, list, show, and edit. The application/CLI layer receives normalized `Issue` or `IssueSummary`; provider identifiers and response casing stay inside the provider adapter. `Issue.state` is `open|closed`; an issue summary excludes the body. The seam exists for the planned second provider, not for dynamic plugins or speculative providers. GitLab implements only the read half of the issue domain today, through its own type rather than this seam, because it has no create or update verb to implement; it joins the seam when those ship.
+`WorkItemProvider` owns the shared GitHub issue create, list, show, and edit operations. The application/CLI layer receives normalized `Issue` or `IssueSummary`; provider identifiers and response casing stay inside provider adapters. `Issue.state` is `open|closed`; an issue summary excludes the body. GitLab issue writes use a provider-owned adapter and native request types rather than forcing its distinct update semantics into GitHub's generic issue seam.
 
 `PullRequestProvider` is a second, narrow seam rather than an extension of `WorkItemProvider`. The two domains differ in nearly every operation — issues use `gh issue create|edit`, while pull requests add diff, checks, review, merge, ready, close, and reopen and normalize state to `open|closed|merged` — so widening the issue seam would force every provider and caller to carry capabilities neither needs. Each seam owns its request types: `NewPr`, `PrQuery`, `PrPatch`, plus `ReviewEvent` and `MergeMethod`. `PrPatch::is_empty` rejects a mutationless update; its guard timestamp alone is not a write. The GitHub composition mirrors the issue adapter, splitting reads, writes, and validation.
 
@@ -171,7 +172,7 @@ Text output escapes terminal control characters in provider strings (titles, aut
 ## Process and security boundary
 
 - One process runner owns all `git`, `gh`, and `glab` process creation. It accepts an executable and argument vector; it never invokes a shell.
-- Create/edit bodies are passed on stdin as text to `gh`; GitHub API reads and `glab issue` reads use no request body. Each output stream has an 8 MiB cap; one absolute 30-second deadline covers child completion and pipe/input workers, and a still-running direct child is killed on expiry.
+- Create/edit bodies are passed on stdin as text to `gh`; GitLab create/update descriptions are passed on stdin to `glab`, never in argv. GitHub API reads and `glab issue` reads use no request body. Each output stream has an 8 MiB cap; one absolute 30-second deadline covers child completion and pipe/input workers, and a still-running direct child is killed on expiry.
 
 - `gh` owns GitHub credentials and `glab` owns GitLab credentials. `workctl` checks `gh auth status` or `glab auth status` and discards the output.
 - Hosted model credentials use `DECISION_MODEL_API_KEY` only after `@auto` explicitly selects a hosted adapter; they are sent only to that adapter's fixed HTTPS endpoint. Local service URLs are rejected unless loopback.
@@ -205,7 +206,8 @@ Text output escapes terminal control characters in provider strings (titles, aut
 | An issue command is given a pull request number | `not_issue` JSON error; no write | Use the issue number, or the `pr` group for pull requests |
 | GitHub command failure | Generic `github_cli` JSON error; raw stderr withheld | Check `gh` authentication/permissions and retry |
 | GitLab command failure | Generic `gitlab_cli` JSON error; raw stderr withheld | Check `glab` authentication/permissions and retry |
-| Child timeout/output cap exceeded | `timeout`/`output_limit` JSON error | Retry after resolving remote/tool issue |
+| GitLab issue write fails, times out, or cannot be confirmed by a read-back | `gitlab_write_uncertain`; the issue may exist or have changed | Check GitLab before retrying |
+| Non-write child timeout/output cap exceeded | `timeout`/`output_limit` JSON error | Retry after resolving remote/tool issue |
 | Malformed provider response | `provider_response` JSON error | Report provider contract mismatch |
 
 ## Verification strategy

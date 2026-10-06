@@ -21,6 +21,7 @@ pub struct Fixture {
     pub log: PathBuf,
     pub input: PathBuf,
     pub glab_log: PathBuf,
+    pub glab_input: PathBuf,
 }
 
 impl Fixture {
@@ -35,6 +36,7 @@ impl Fixture {
         let log = root.join("gh-args.log");
         let input = root.join("gh-input.json");
         let glab_log = root.join("glab-args.log");
+        let glab_input = root.join("glab-input.txt");
         let script = r#"#!/bin/sh
 printf '%s\n' "$*" >> "$WORKCTL_GH_LOG"
 if [ "$1" = "--version" ]; then
@@ -187,8 +189,35 @@ if [ "$1" = "issue" ] && [ "$2" = "list" ]; then
     printf '%s\n' '[{"iid":8,"title":"First","description":"first body","state":"opened","web_url":"https://gitlab.com/group/sub/project/-/issues/8","created_at":"2026-01-01T00:00:00.000Z","updated_at":"2026-01-02T00:00:00.000Z"},{"iid":9,"title":"Second","description":null,"state":"closed","web_url":"https://gitlab.com/group/sub/project/-/issues/9","created_at":"2026-01-03T00:00:00.000Z","updated_at":"2026-01-04T00:00:00.000Z"}]'
     exit 0
 fi
+if [ "$1" = "issue" ] && [ "$2" = "create" ]; then
+    cat > "$WORKCTL_GLAB_INPUT"
+    if [ "$WORKCTL_GLAB_MODE" = "write-failure" ]; then
+        printf '%s\n' 'private provider diagnostic' >&2
+        exit 1
+    fi
+    if [ "$WORKCTL_GLAB_MODE" = "bad-create-url" ]; then
+        printf '%s\n' 'https://gitlab.com/other/project/-/issues/21'
+    else
+        printf '%s\n' 'https://gitlab.com/group/sub/project/-/issues/21'
+    fi
+    exit 0
+fi
+if [ "$1" = "issue" ] && [ "$2" = "update" ]; then
+    case " $* " in
+        *" --description-file=- "*) cat > "$WORKCTL_GLAB_INPUT" ;;
+    esac
+    if [ "$WORKCTL_GLAB_MODE" = "write-failure" ]; then
+        printf '%s\n' 'private provider diagnostic' >&2
+        exit 1
+    fi
+    exit 0
+fi
 if [ "$1" = "issue" ] && [ "$2" = "view" ]; then
-    printf '%s\n' '{"iid":12,"title":"Crash on startup","description":"Steps to reproduce","state":"opened","web_url":"https://gitlab.com/group/sub/project/-/issues/12","created_at":"2026-01-02T03:04:05.000Z","updated_at":"2026-01-03T04:05:06.000Z"}'
+    if [ "$7" = "21" ]; then
+        printf '%s\n' '{"iid":21,"title":"Created issue","description":"Created description","state":"opened","web_url":"https://gitlab.com/group/sub/project/-/issues/21","created_at":"2026-01-02T03:04:05.000Z","updated_at":"2026-01-03T04:05:06.000Z"}'
+    else
+        printf '%s\n' '{"iid":12,"title":"Crash on startup","description":"Steps to reproduce","state":"opened","web_url":"https://gitlab.com/group/sub/project/-/issues/12","created_at":"2026-01-02T03:04:05.000Z","updated_at":"2026-01-03T04:05:06.000Z"}'
+    fi
     exit 0
 fi
 printf '%s\n' 'unexpected fixture invocation' >&2
@@ -200,13 +229,14 @@ exit 64
             .expect("read fixture permissions")
             .permissions();
         permissions.set_mode(0o755);
-        fs::set_permissions(&glab_path, permissions).expect("make fixture executable");
+        fs::set_permissions(&glab_path, permissions).expect("make glab fixture executable");
         Self {
             root,
             bin,
             log,
             input,
             glab_log,
+            glab_input,
         }
     }
 
@@ -235,6 +265,7 @@ exit 64
             .env("WORKCTL_GH_INPUT", &self.input)
             .env("WORKCTL_GH_MODE", mode)
             .env("WORKCTL_GLAB_LOG", &self.glab_log)
+            .env("WORKCTL_GLAB_INPUT", &self.glab_input)
             .env("WORKCTL_GLAB_MODE", mode)
             .env("DECISION_MODEL", model)
             .env_remove("DECISION_MODEL_API_KEY");
@@ -273,6 +304,11 @@ exit 64
             .lines()
             .map(str::to_owned)
             .collect()
+    }
+
+    /// Exact UTF-8 request body captured from the GitLab CLI's stdin.
+    pub fn glab_input(&self) -> Vec<u8> {
+        fs::read(&self.glab_input).unwrap_or_default()
     }
 }
 

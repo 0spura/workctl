@@ -229,9 +229,9 @@ These require a focused architecture decision; this proposal selects no flag, st
 **Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.2
 
 - Selecting GitLab (explicit `--provider gitlab`, `provider`/`workItemProvider`, or a `gitlab.com` origin) activates the GitLab grammar in place of the GitHub grammar.
-- The GitLab grammar mirrors the `glab` CLI. Its `issue` group provides `list` and `view`, using GitLab flag names (`--closed`, `--all`, `--label`, `--assignee`, `--author`, `--milestone`, `--search`, `--per-page`). `create`, `update`, and the `mr` group are tracked for later slices and are absent, not stubbed.
-- GitHub-only verbs and flags (`edit`, `--body`, `--state`, `--limit`) are usage errors raised before any provider call. `pr` is also a usage error whose message names `mr`, the GitLab group for merge requests, without claiming that group exists yet.
-- Every GitLab command authenticates first with `glab auth status --hostname gitlab.com`, and the project reaches `glab` as a full `https://gitlab.com/GROUP[/SUBGROUP]/PROJECT` URL so the host never depends on the working directory.
+- The GitLab grammar mirrors the `glab` CLI. Its `issue` group provides `create`, `list`, `view`, and `update`, using GitLab flag names; the `mr` group remains a later slice.
+- GitHub-only verbs and flags (`edit`, `--body`, `--state`, `--limit`) are usage errors raised before any provider call. `pr` is also a usage error whose message names `mr`.
+- Each valid GitLab operation authenticates with `glab auth status --hostname gitlab.com` before invoking the operation; local syntax/field validation completes first. The project reaches `glab` as a full `https://gitlab.com/GROUP[/SUBGROUP]/PROJECT` URL so the host never depends on the working directory.
 - A missing or unauthenticated `glab` maps to `dependency` and `authentication`; no provider stderr reaches the user.
 
 **Acceptance:** In a GitLab-configured root, `workctl issue --help` lists exactly the GitLab issue verbs, `workctl issue edit 1` and `workctl issue list --limit 5` are usage errors, `workctl pr list` fails with an error naming `mr`, and a missing `glab` produces the safe dependency error rather than a provider diagnostic.
@@ -257,6 +257,28 @@ These require a focused architecture decision; this proposal selects no flag, st
 
 **Acceptance:** A valid issue returns exactly the shared record shape; zero or malformed numbers are usage errors; a failed read reports `gitlab_cli` without leaking provider stderr.
 **Verification:** Integration tests `gitlab_view_maps_the_description_onto_the_body`, `gitlab_rejects_an_invalid_issue_number_before_glab`, and `gitlab_failures_report_stable_codes_without_provider_output`.
+
+### RF-GL.4: Create a GitLab issue
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-GL.1
+
+- `issue create` requires a nonblank `--title` and an explicitly supplied `--description` or `--description-file`; it never prompts. Description data is passed as UTF-8 on `glab` stdin, never in argv; a description consisting only of `-` is rejected because `glab` reserves it for editor behavior.
+- Native optional fields are `--label` (repeatable), `--assignee` (repeatable plain usernames), `--milestone`, `--confidential`, `--weight` (including zero), and `--due-date` (valid `YYYY-MM-DD`). Because `glab issue create --weight=0` omits the zero value, `workctl` explicitly follows creation with `glab issue update --weight=0` when requested.
+- On success, the CLI validates the created issue URL against the selected project, reads the created IID through `glab issue view`, and returns the shared `Issue`.
+- A provider write or post-write confirmation failure returns `gitlab_write_uncertain`; raw provider diagnostics are withheld.
+
+**Acceptance:** A fixture observes the documented native arguments and exact stdin bytes; successful create returns the read-back issue; failed or unconfirmable creates do not leak provider output.
+**Verification:** Integration tests `rf_gl_4_gitlab_create_uses_native_flags_and_stdin_description` and `gitlab_write_uncertainty_hides_diagnostics_and_rejects_untrusted_create_url`.
+
+### RF-GL.5: Update a GitLab issue
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-GL.1
+
+- `issue update NUMBER` accepts any nonempty combination of `--title`, `--description`/`--description-file`, `--label`, `--unlabel`, `--assignee`, `--unassign`, `--milestone`, `--confidential`/`--public`, `--weight`, and `--due-date`; an empty update fails before provider access.
+- Description input is sent as UTF-8 stdin, not argv. Empty descriptions are rejected because `glab issue update` does not clear the description with an empty value.
+- Milestone empty string or `0` clears the milestone; weight zero is preserved on update; assignee +/-/! prefixes use GitLab's relative assignment semantics.
+- A successful write is followed by `glab issue view` and returns the shared `Issue`. A failed write or read-back returns `gitlab_write_uncertain` with no raw diagnostics.
+
+**Acceptance:** Fixture assertions cover native mutation semantics, exact description bytes, read-back, empty-update rejection before `glab`, and safe errors after an uncertain write.
+**Verification:** Integration tests `rf_gl_5_gitlab_update_uses_native_flags_and_reads_back_the_issue` and `gitlab_writes_reject_empty_or_invalid_changes_before_authentication`.
 
 ### RF-CFG.1: Project configuration
 **Priority:** Must Have | **Status:** Implemented | **Dependencies:** none
@@ -300,7 +322,7 @@ These require a focused architecture decision; this proposal selects no flag, st
 
 - GitHub operations invoke the authenticated `gh` CLI with argument arrays; no shell is used.
 - GitLab operations invoke the authenticated `glab` CLI the same way: one argument array, the project as a full URL, and the issue number as its own argument.
-- Create/edit body text travels on stdin as UTF-8 text to `gh` and is not embedded in command arguments; reads through `gh api` and `glab issue` send no request body.
+- GitLab issue descriptions travel on stdin to `glab`; they are never embedded in process arguments. Reads through `gh api` and `glab issue` send no request body.
 - `workctl` never reads, stores, or logs provider tokens. It does not download `gh`, `glab`, or update installed toolchains automatically.
 
 **Acceptance:** Hostile shell-like title/body text is preserved as data; code review confirms no shell invocation or token access.

@@ -12,11 +12,36 @@ pub(super) fn repo_argument(repo: &str) -> String {
     format!("https://{HOST}/{repo}")
 }
 
-/// Runs `glab`, mapping a process failure onto the shared error contract.
+/// Runs `glab`, optionally sending text through stdin, and maps process failures onto the shared
+/// error contract.
 pub(super) fn run_glab(args: &[String]) -> Result<Vec<u8>, AppError> {
-    let output = runner::run("glab", args, None, None).map_err(map_process_error)?;
+    run_glab_with_input(args, None)
+}
+
+pub(super) fn run_glab_with_input(
+    args: &[String],
+    input: Option<Vec<u8>>,
+) -> Result<Vec<u8>, AppError> {
+    let output = runner::run("glab", args, input, None).map_err(map_process_error)?;
     if !output.success {
         return Err(AppError::gitlab_cli());
+    }
+    Ok(output.stdout)
+}
+
+/// A write failure after process launch can leave the remote mutation committed.
+pub(super) fn run_glab_mutation(
+    args: &[String],
+    input: Option<Vec<u8>>,
+) -> Result<Vec<u8>, AppError> {
+    let output = runner::run("glab", args, input, None).map_err(|error| match error {
+        ProcessError::NotFound => AppError::dependency(),
+        ProcessError::Timeout | ProcessError::OutputLimit | ProcessError::Io => {
+            AppError::gitlab_write_uncertain()
+        }
+    })?;
+    if !output.success {
+        return Err(AppError::gitlab_write_uncertain());
     }
     Ok(output.stdout)
 }

@@ -139,3 +139,199 @@ fn gitlab_rejects_an_invalid_issue_number_before_glab() {
     }
     assert!(fixture.glab_invocations().is_empty());
 }
+
+#[test]
+fn rf_gl_4_gitlab_create_uses_native_flags_and_stdin_description() {
+    let fixture = Fixture::new();
+    let description = "First line\n--title=must remain data\n";
+    let description_file = fixture.root.join("create-description.txt");
+    std::fs::write(&description_file, description).expect("write description fixture");
+    let description_path = description_file.to_str().expect("UTF-8 fixture path");
+    let output = fixture.run_gitlab(
+        &[
+            "issue",
+            "create",
+            "--title",
+            "New issue",
+            "--description-file",
+            description_path,
+            "--label",
+            "bug",
+            "--label",
+            "triage",
+            "--assignee",
+            "alice",
+            "--milestone",
+            "M1",
+            "--confidential",
+            "--weight",
+            "0",
+            "--due-date",
+            "2026-02-28",
+        ],
+        "",
+    );
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fixture.glab_invocations(),
+        vec![
+            "auth status --hostname gitlab.com".to_owned(),
+            format!(
+                "issue create --repo {PROJECT} --title=New issue --description-file=- \
+                 --label=bug --label=triage --assignee=alice --milestone=M1 --confidential \
+                 --weight=0 --due-date=2026-02-28"
+            ),
+            format!("issue update 21 --repo {PROJECT} --weight=0"),
+            format!("issue view --output json --repo {PROJECT} 21"),
+        ]
+    );
+    assert_eq!(fixture.glab_input(), description.as_bytes());
+    let issue = success_json(&output);
+    assert_eq!(issue["number"], 21);
+    assert_eq!(issue["body"], "Created description");
+    assert_eq!(issue["url"], format!("{PROJECT}/-/issues/21"));
+}
+
+#[test]
+fn rf_gl_5_gitlab_update_uses_native_flags_and_reads_back_the_issue() {
+    let fixture = Fixture::new();
+    let description = "Replacement\nwith exact bytes\n";
+    let description_file = fixture.root.join("update-description.txt");
+    std::fs::write(&description_file, description).expect("write description fixture");
+    let description_path = description_file.to_str().expect("UTF-8 fixture path");
+    let output = fixture.run_gitlab(
+        &[
+            "issue",
+            "update",
+            "12",
+            "--title",
+            "Updated title",
+            "--description-file",
+            description_path,
+            "--label",
+            "ready",
+            "--unlabel",
+            "triage",
+            "--assignee=+alice",
+            "--assignee=-bob",
+            "--milestone",
+            "",
+            "--public",
+            "--weight",
+            "0",
+            "--due-date",
+            "2026-02-28",
+        ],
+        "",
+    );
+
+    assert_eq!(
+        fixture.glab_invocations(),
+        vec![
+            "auth status --hostname gitlab.com".to_owned(),
+            format!(
+                "issue update 12 --repo {PROJECT} --title=Updated title --description-file=- \
+                 --label=ready --unlabel=triage --assignee=+alice --assignee=-bob --milestone= \
+                 --public --weight=0 --due-date=2026-02-28"
+            ),
+            format!("issue view --output json --repo {PROJECT} 12"),
+        ]
+    );
+    assert_eq!(fixture.glab_input(), description.as_bytes());
+    let issue = success_json(&output);
+    assert_eq!(issue["number"], 12);
+    assert_eq!(issue["body"], "Steps to reproduce");
+}
+
+#[test]
+fn gitlab_writes_reject_empty_or_invalid_changes_before_authentication() {
+    let fixture = Fixture::new();
+    let empty_description = fixture.root.join("empty-description.txt");
+    std::fs::write(&empty_description, "").expect("write empty description fixture");
+    let empty_path = empty_description.to_str().expect("UTF-8 fixture path");
+    let dash_description = fixture.root.join("dash-description.txt");
+    std::fs::write(&dash_description, "-").expect("write dash description fixture");
+    let dash_path = dash_description.to_str().expect("UTF-8 fixture path");
+    let invalid = [
+        fixture.run_gitlab(
+            &["issue", "create", "--title", "Dash", "--description", "-"],
+            "",
+        ),
+        fixture.run_gitlab(
+            &["issue", "update", "12", "--description-file", dash_path],
+            "",
+        ),
+        fixture.run_gitlab(&["issue", "create", "--title", "No description"], ""),
+        fixture.run_gitlab(&["issue", "update", "12"], ""),
+        fixture.run_gitlab(
+            &["issue", "update", "12", "--description-file", empty_path],
+            "",
+        ),
+        fixture.run_gitlab(
+            &[
+                "issue",
+                "update",
+                "12",
+                "--assignee",
+                "alice",
+                "--unassign",
+            ],
+            "",
+        ),
+        fixture.run_gitlab(
+            &["issue", "update", "12", "--due-date", "2026-02-30"],
+            "",
+        ),
+    ];
+    for output in invalid {
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+    }
+    assert!(fixture.glab_invocations().is_empty());
+}
+
+#[test]
+fn gitlab_write_uncertainty_hides_diagnostics_and_rejects_untrusted_create_url() {
+    let fixture = Fixture::new();
+    let description = fixture.root.join("description.txt");
+    std::fs::write(&description, "create").expect("write description fixture");
+    let description_path = description.to_str().expect("UTF-8 fixture path");
+    let failed = fixture.run_gitlab(
+        &[
+            "issue",
+            "create",
+            "--title",
+            "New",
+            "--description-file",
+            description_path,
+        ],
+        "write-failure",
+    );
+    assert_eq!(error_json(&failed)["code"], "gitlab_write_uncertain");
+    assert!(!String::from_utf8_lossy(&failed.stderr).contains("private provider diagnostic"));
+    assert_eq!(fixture.glab_invocations().len(), 2);
+
+    let fixture = Fixture::new();
+    let description = fixture.root.join("description.txt");
+    std::fs::write(&description, "create").expect("write description fixture");
+    let description_path = description.to_str().expect("UTF-8 fixture path");
+    let bad_url = fixture.run_gitlab(
+        &[
+            "issue",
+            "create",
+            "--title",
+            "New",
+            "--description-file",
+            description_path,
+        ],
+        "bad-create-url",
+    );
+    assert_eq!(error_json(&bad_url)["code"], "gitlab_write_uncertain");
+    assert_eq!(fixture.glab_invocations().len(), 2);
+}
+

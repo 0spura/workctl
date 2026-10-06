@@ -38,6 +38,13 @@ impl AppError {
     pub const fn gitlab_authentication() -> Self {
         Self::new("authentication", "GitLab CLI authentication is required")
     }
+    pub const fn gitlab_write_uncertain() -> Self {
+        Self::new(
+            "gitlab_write_uncertain",
+            "the GitLab write may have succeeded but its result could not be confirmed; check the issue before retrying",
+        )
+    }
+
 
     pub const fn gitlab_cli() -> Self {
         Self::new("gitlab_cli", "the GitLab CLI operation failed")
