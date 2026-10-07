@@ -120,7 +120,6 @@ fn decode(bytes: Vec<u8>) -> Result<String, AppError> {
     String::from_utf8(bytes).map_err(|_| AppError::invalid_input("body text must be valid UTF-8"))
 }
 
-
 /// Resolves the repository selected by the provider flags and the current directory.
 pub(super) fn resolve_repo(
     explicit_provider: Option<Provider>,
@@ -130,4 +129,35 @@ pub(super) fn resolve_repo(
         .map_err(|_| AppError::context("could not determine the current directory"))?;
     let context = config::resolve_context(explicit_provider, explicit_repo, Path::new(&cwd))?;
     Ok(context.repo)
+}
+pub(super) fn github_issue_defaults(
+    repo: &str,
+) -> Result<Option<crate::config::GithubIssueDefaults>, AppError> {
+    let cwd = std::env::current_dir()
+        .map_err(|_| AppError::context("could not determine the current directory"))?;
+    let config = crate::config::load_for_cwd(Path::new(&cwd))?;
+    let Some(issue) = config
+        .defaults
+        .and_then(|defaults| defaults.github)
+        .and_then(|github| github.issue)
+    else {
+        return Ok(None);
+    };
+    let mut issue = issue;
+    if !issue
+        .project
+        .as_ref()
+        .is_some_and(|project| project.repositories.iter().any(|allowed| allowed == repo))
+    {
+        issue.project = None;
+    }
+    if issue.project.is_some()
+        || !issue.assignees.is_empty()
+        || !issue.labels.is_empty()
+        || !issue.label_candidates.is_empty()
+    {
+        Ok(Some(issue))
+    } else {
+        Ok(None)
+    }
 }

@@ -51,13 +51,13 @@ pub enum PrAction {
 #[derive(Debug, Args)]
 pub struct CreateArgs {
     /// Pull request title; must not be blank
-    #[arg(long, value_parser = common::parse_non_blank)]
+    #[arg(long, short = 't', value_parser = common::parse_non_blank)]
     pub title: String,
     /// Pull request body text
-    #[arg(long)]
+    #[arg(long, short = 'b')]
     pub body: Option<String>,
     /// Read the body from a file; `-` reads standard input
-    #[arg(long = "body-file", value_name = "FILE")]
+    #[arg(long = "body-file", short = 'F', value_name = "FILE")]
     pub body_file: Option<String>,
     /// Branch the pull request merges into; defaults to the repository default branch
     #[arg(long)]
@@ -82,7 +82,7 @@ pub struct CreateArgs {
     pub reviewers: Vec<String>,
     /// Set the milestone by name, or `@current` for the nearest open milestone
     /// due today or later
-    #[arg(long, value_parser = common::parse_non_blank)]
+    #[arg(long, short = 'm', value_parser = common::parse_non_blank)]
     pub milestone: Option<String>,
     /// Add to a project; may be repeated
     #[arg(long = "project", value_name = "TITLE", value_parser = common::parse_non_blank)]
@@ -160,10 +160,10 @@ pub struct ReviewArgs {
     #[arg(long)]
     pub comment: bool,
     /// Review body text
-    #[arg(long)]
+    #[arg(long, short = 'b')]
     pub body: Option<String>,
     /// Read the review body from a file; `-` reads standard input
-    #[arg(long = "body-file", value_name = "FILE")]
+    #[arg(long = "body-file", short = 'F', value_name = "FILE")]
     pub body_file: Option<String>,
 }
 
@@ -197,7 +197,7 @@ pub struct EditArgs {
     /// Pull request number
     pub number: PrNumber,
     /// New title; must not be blank
-    #[arg(long, value_parser = common::parse_non_blank)]
+    #[arg(long, short = 't', value_parser = common::parse_non_blank)]
     pub title: Option<String>,
     #[command(flatten)]
     pub change: BodyChangeArgs,
@@ -224,10 +224,10 @@ pub struct EditArgs {
     pub remove_assignee: Vec<String>,
     /// Set the milestone by name, or `@current` for the nearest open milestone
     /// due today or later
-    #[arg(long, value_parser = common::parse_non_blank)]
+    #[arg(long, short = 'm', value_parser = common::parse_non_blank)]
     pub milestone: Option<String>,
     /// Remove the current milestone
-    #[arg(long)]
+    #[arg(long = "remove-milestone")]
     pub clear_milestone: bool,
     /// Add to a project; may be repeated
     #[arg(long = "add-project", value_name = "TITLE", value_parser = common::parse_non_blank)]

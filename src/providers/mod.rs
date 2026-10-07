@@ -168,7 +168,6 @@ pub trait WorkItemProvider {
     fn create(&self, issue: &NewIssue) -> Result<Issue, AppError>;
     fn list(&self, query: &IssueQuery) -> Result<Vec<IssueSummary>, AppError>;
     fn show(&self, number: u64) -> Result<Issue, AppError>;
-    fn edit(&self, number: u64, patch: &IssuePatch) -> Result<Issue, AppError>;
 }
 
 /// Pull request operations, kept separate from `WorkItemProvider` so each seam stays narrow.

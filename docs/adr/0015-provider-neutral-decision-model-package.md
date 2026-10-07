@@ -4,6 +4,7 @@
 - Date: 2026-10-04
 - Tracker: [issue #8](https://github.com/0spura/workctl/issues/8)
 - Supersedes: [ADR-0010](./0010-automatic-issue-labels.md) for the `--auto-labels` opt-in flag, and [ADR-0014](./0014-native-decision-model-adapters.md) for adapter package structure and the local-model contract. The 0.8 selection policy carries forward.
+- GLiNERDecideAdapter superseded by: [ADR-0020](./0020-remove-gliner-python-server.md), which withdraws the native GLiNER2.5-Decide local adapter.
 
 ## Context
 

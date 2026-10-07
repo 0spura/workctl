@@ -14,10 +14,13 @@ pub fn write_success<T: Serialize>(value: &T) -> Result<(), AppError> {
 pub fn write_error(error: &AppError) {
     let stderr = io::stderr();
     let mut stderr = stderr.lock();
-    let value = serde_json::json!({
+    let mut value = serde_json::json!({
         "code": error.code,
         "message": error.message,
     });
+    if let Some(details) = &error.details {
+        value["details"] = details.clone();
+    }
     let _ = serde_json::to_writer(&mut stderr, &value);
     let _ = stderr.write_all(b"\n");
 }

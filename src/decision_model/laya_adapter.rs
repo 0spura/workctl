@@ -2,7 +2,7 @@ use super::{
     DecisionInput,
     system_one::{self, Auth},
 };
-use crate::domain::{AppError, LabelSuggestion};
+use crate::domain::{AppError, DecisionScore};
 
 const ENDPOINT: &str = "https://api.laya.studio/v1/systemone";
 
@@ -12,7 +12,7 @@ impl LayaAdapter {
     pub fn suggest(
         api_key: &str,
         input: DecisionInput<'_>,
-    ) -> Result<Vec<LabelSuggestion>, AppError> {
+    ) -> Result<Vec<DecisionScore>, AppError> {
         system_one::suggest(ENDPOINT, None, Auth::Bearer, api_key, input, 32)
     }
 }

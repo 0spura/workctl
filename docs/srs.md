@@ -27,9 +27,9 @@ Actors: a developer or coding agent running `workctl` locally. Observable behavi
 
 - `create` requires a nonblank title, accepts an optional body from `--body` or `--body-file FILE` (`-` reads standard input), and optionally accepts repeated `--assignee`, `--label`, `--project`, one `--milestone`, repeated `--attach FILE[#ALT]`.
 - `--label @auto` opts into automatic label selection through the provider-neutral `DecisionModel` package. It may be combined with manual `--label` values. Only labels with scores >= 0.8 are added.
-- `DECISION_MODEL` selects `jev-latest`, `laya`, `fastino/GLiNER2.5-Decide`, `fastino/GLiDE`, or `local/<model-id>` for an OpenAI-compatible local Chat Completions service. Hosted adapters require `DECISION_MODEL_API_KEY`; local adapters do not.
-- The model package consumes generic work-item title/description and candidate labels; it does not depend on a code-host response type. Current issue commands use the active code-host provider; PR labeling is outside scope.
-- Native typed-decision adapters provide their own probabilities/confidence. Generic local LLM scores are generated estimates, not calibrated probabilities. All responses must cover each candidate label exactly once with a finite score in [0,1].
+- `DECISION_MODEL` selects `jev-latest`, `laya`, `fastino/GLiDE`, or `local/<model-id>` for an OpenAI-compatible local Chat Completions service. Hosted adapters require `DECISION_MODEL_API_KEY`; local adapters do not.
+- The model package consumes generic work-item title/description and named candidates with optional descriptions; it does not depend on a code-host response type. Current issue commands use the active code-host provider; PR labeling is outside scope.
+- Native typed-decision adapters provide their own probabilities/confidence. Generic local LLM scores are generated estimates, not calibrated probabilities. All responses must cover each candidate exactly once with a finite score in [0,1].
 - `DECISION_MODEL_BASE_URL` configures only local services and must target loopback. Hosted endpoints are fixed. Model/configuration/credential/output failures prevent the issue write.
 - `--milestone @current` assigns the open GitHub milestone with the nearest due date today or later. Overdue and undated milestones are ignored. If no milestone qualifies, or two milestones tie for the nearest eligible due date, creation fails with `invalid_input` before any write.
 - Omitting `--milestone` leaves the milestone unset and performs no milestone lookup, so no milestone is ever assigned implicitly. Any other value is a literal milestone name passed through unchanged. Issue edits never apply a default; omitted native metadata remains unchanged. Semantic declarations are a separate proposed extension (RF-WI.5), not part of the implemented create contract.
@@ -61,20 +61,23 @@ Actors: a developer or coding agent running `workctl` locally. Observable behavi
 **Verification:** Integration tests with provider fixtures.
 
 ### RF-WI.4: Edit an issue
-**Priority:** Must Have | **Status:** In Progress | **Dependencies:** RF-CFG.1, RF-PRV.1
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.1, RF-PRV.1
 
-- `edit NUMBER` accepts an optional title, one body change, assignee/label/project additions and removals, milestone set/removal, and attachments; at least one mutation is required.
+- `edit NUMBER|URL...` accepts one or more GitHub issues in the same repository. Targets are positive numbers or canonical `https://github.com/OWNER/REPO/issues/NUMBER` URLs; a URL supplies repository/provider context when omitted. Mixed target repositories fail before provider access. Repeated targets are processed once.
 - `--add-label @auto` opts into `DecisionModel`; manual additions may appear in the same argument list. `--remove-label @auto` is rejected. No model selection/configuration or request occurs without the sentinel.
 - Body changes never require the caller to reproduce the whole body: `--body`/`--body-file` replaces it, `--append-body`/`--append-body-file` appends, `--replace-section HEADING` with `--section-body`/`--section-body-file` replaces one ATX section, and `--patch-file` applies a unified diff.
 - `--patch-file` applies hunks by exact context match. Unmatched context is a `patch_conflict` error and no write is sent; line numbers are not trusted. Body text from a file or stdin is UTF-8 and capped at 1 MiB.
 - At most one body-change flag may be supplied, and `--replace-section` requires its section body. Violations fail before invoking the code-host provider.
 - `--expect-updated-at TIMESTAMP` fails with `conflict` when the fetched issue's `updated_at` differs, before any write. With `@auto`, the selected adapter classifies final proposed title/description; qualifying labels are additive and existing labels remain. The command rechecks the issue timestamp before writing to reject concurrent edits during classification.
-- Metadata and attachment values are optional. Blank titles/metadata values are rejected; `--milestone` and `--clear-milestone` cannot be combined.
-- `--milestone NAME` sets a literal milestone; `--milestone @current` resolves the nearest eligible open milestone exactly as create does and fails with `invalid_input` when none qualifies or the nearest dates tie. `--clear-milestone` removes the milestone.
+- Metadata and attachment values are optional. Blank titles/metadata values are rejected; `--milestone` and `--remove-milestone` cannot be combined. The old `--clear-milestone` flag is removed without an alias.
+- `--milestone NAME` sets a literal milestone; `--milestone @current` resolves the nearest eligible open milestone exactly as create does and fails with `invalid_input` when none qualifies or the nearest dates tie. `--remove-milestone` removes the milestone.
 - Attachments use `gh issue edit --attach`; GitHub CLI 2.99.0 or newer is required only when `--attach` is supplied.
+- Native GitHub edit fields are `--type`/`--remove-type`, `--parent`/`--remove-parent`, `--add-sub-issue`/`--remove-sub-issue`, `--add-blocked-by`/`--remove-blocked-by`, and `--add-blocking`/`--remove-blocking`. Relationship references accept positive numbers or canonical GitHub issue URLs, including cross-repository URLs. Set/remove conflicts and adding/removing the same normalized relationship fail before writes; GitHub enforces relationship authorization and cycle constraints.
+- Native shortcuts are `-t` (title), `-b` (body), `-F` (body file), `-m` (milestone), and global `-R` (repository). Assignee/label/project changes and relationship lists accept repeated or comma-separated values.
+- Each target preserves its pre-write issue guard and body resolution. Multiple targets execute serially; a later failure stops the batch and returns generic `partial_success` with completed/pending target URLs and safe failure details. A successful native mutation followed by failed readback also returns `partial_success`; no operation is retried automatically. One target returns one full issue record; multiple distinct targets return an array of full records.
 
 **Acceptance:** Editing supports independent metadata and attachment-only updates without changing omitted fields; body changes produce the expected provider write after a pre-write fetch; a stale timestamp, non-applying patch, no-field update, blank value, conflicting or incomplete body change fail before the write. Automatic labels use final proposed text, preserve existing labels, reject concurrent changes, and perform no write if no automatic or other label is selected and no other change was requested.
-**Verification:** Integration tests for body changes, metadata flags, attachments/version gate, partial updates, concurrency guard, marker validation, model selection and input rejection; adapter unit tests include score-boundary validation.
+**Verification:** Integration tests in `tests/cli_issues.rs` cover body changes, metadata, attachments/version gate, partial updates, concurrency, marker validation and automatic labels. Stateful `tests/cli_native_edit.rs` scenarios cover relationship direction and removal, native shortcuts, type changes, URL targets, comma-separated metadata, batch success/partial failure, invalid references/conflicts, stale guards, and post-write readback failure.
 ### Proposed extension RF-WI.5: Private semantic declaration on issue create
 **Priority:** Proposed | **Status:** Proposed | **Dependencies:** RF-WI.1, RF-PRV.1
 
@@ -98,6 +101,21 @@ not automatic.
 **Not yet specified for implementation:** protected input surface, private-store location/format,
 reconciliation command, and safe caller-visible representation of a post-create pending association.
 These require a focused architecture decision; this proposal selects no flag, storage engine, or API.
+
+
+### RF-WI.6: GitHub Project defaults and dynamic issue fields
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-WI.1, RF-CFG.3
+
+- GitHub issue creation accepts repeated `--project-field NAME=VALUE`. The fields resolve against the single effective Project profile; an explicit `--project` may select that profile only when its discovered title matches. Zero, multiple, or mismatched Projects fail before issue creation.
+- An in-scope GitHub issue defaults profile can supply assignees, labels, Project membership, and Project field values. Project membership and its fields apply only when the resolved repository exactly matches an allowlisted repository path. Explicit assignees replace defaults; labels are the configured-first ordered de-duplicated union with explicit labels; explicit field values override configured values.
+- `defaults.github.issue.labelCandidates` limits the repository labels supplied to `DecisionModel` for `@auto` during issue create/edit. `defaults.github.issue.project.autoSelectFields` opts in to dynamic selection for exactly the listed Project fields during issue creation. Only single-select and iteration fields are model-selectable; their discovered options are sent together with title/body and any `@auto` label candidates in one model request. Existing configured or explicit values suppress selection of their matching fields. Scores below 0.8 leave a field unset; a tied best score fails before issue creation. Model/configuration/output errors also fail before issue creation.
+- Project schema and values are discovered dynamically through the authenticated GitHub GraphQL interface. Supported direct assignments: text, number, date, single-select option, and iteration. Unknown fields, unsupported types, invalid values, and unknown options fail before issue creation.
+- After issue creation, Project membership and each field are applied serially. These remote writes are not transactional. A later failure returns generic `partial_success` details identifying the created issue and completed/pending operations; workctl never retries the create automatically.
+- GitHub issue editing accepts repeated `--project-field NAME=VALUE` and `--clear-project-field NAME` against the in-scope configured Project. Validate all fields before writes; reject duplicate assignments, set/clear overlaps, incompatible Project removal, and mismatched explicit Project titles. Do not reapply creation defaults or automatic field selection, or automatically add membership. Field-only changes skip the issue mutation. Combined changes write the issue first and fields serially; a failure after any completed issue or field write returns `partial_success` with completed/pending operations and no retry. Preserve issue timestamp guards; Project fields have no issue-revision concurrency guarantee.
+
+**Acceptance:** Typed field values map to discovered field IDs/options/iterations; configured defaults and CLI overrides yield one Project operation; out-of-scope repositories do not inherit Project membership or fields; Project schema/value errors cause no issue write; automatic selection is allowlisted, combines with label classification in one request, respects explicit/configured precedence, and leaves low-confidence fields unset; ties and model failures cause no issue write; post-create failures report safe partial-success details without leaking provider diagnostics or retrying.
+**Verification:** Isolated CLI integration tests for field types, precedence, candidate filtering, selection threshold/tie, pre-write rejection, and partial failure; `project_edit_*` and `project_field_only_edit_reports_completed_operations_on_later_failure` exercise edit validation, scope, guards, field-only writes, clear operations, and serial partial failure.
+Selection regressions `unique_best_option_wins_over_lower_ties_in_every_order` and `tied_maximum_is_rejected_in_every_order` verify that only a tie at the final maximum is ambiguous; lower-scoring ties do not suppress a unique winner, regardless of option order.
 
 
 ### RF-PR.1: Create a pull request
@@ -186,7 +204,7 @@ These require a focused architecture decision; this proposal selects no flag, st
 
 - `pr edit NUMBER` accepts a title change, one body change, a base-branch change, label/reviewer/assignee/project additions and removals, a milestone set/removal, attachments, or any combination; at least one change is required.
 - Body changes reuse the same set and shared resolver as `issue edit`: `--body`/`--body-file` replaces, `--append-body`/`--append-body-file` appends, `--replace-section` replaces one ATX section, and `--patch-file` applies a unified diff. At most one body change may be supplied; `--replace-section` requires its section body.
-- `--add-label`/`--remove-label`, `--add-reviewer`/`--remove-reviewer`, `--add-assignee`/`--remove-assignee`, and `--add-project`/`--remove-project` may be repeated. `--milestone NAME` sets a literal milestone and `--milestone @current` resolves the nearest eligible open milestone exactly as create does, failing with `invalid_input` when none qualifies or the nearest dates tie; `--clear-milestone` removes it. `--attach FILE[#ALT]` may be repeated.
+- `--add-label`/`--remove-label`, `--add-reviewer`/`--remove-reviewer`, `--add-assignee`/`--remove-assignee`, and `--add-project`/`--remove-project` may be repeated. `--milestone NAME` sets a literal milestone and `--milestone @current` resolves the nearest eligible open milestone exactly as create does, failing with `invalid_input` when none qualifies or the nearest dates tie; `--remove-milestone` removes it. `--attach FILE[#ALT]` may be repeated. GitHub PR edit accepts native `-t`, `-b`, `-F`, and `-m` shortcuts; `--clear-milestone` is removed without an alias.
 - Metadata and attachments are optional; `workctl` does not infer values or apply defaults. Attachments require GitHub CLI 2.99.0 or newer, checked only when requested.
 - The pull request is fetched and validated before writing; `--expect-updated-at TIMESTAMP` fails with `conflict` when `updated_at` differs.
 - The updated pull request is returned as a full record; a target that is not a pull request fails with `not_pull_request` before any write.
@@ -283,8 +301,8 @@ These require a focused architecture decision; this proposal selects no flag, st
 ### RF-CFG.1: Project configuration
 **Priority:** Must Have | **Status:** Implemented | **Dependencies:** none
 
-- Both optional files are discovered at the Git worktree root and validated on every command invocation, even when CLI flags override selected values. Local fields override shared fields.
-- The v0 schema contains only `provider` and `workItemProvider`; each accepts `github` or `gitlab`. Files must be regular, non-symlink files no larger than 64 KiB. Unknown keys and invalid JSON fail closed.
+- Both optional files are discovered at the Git worktree root and validated on every command invocation, even when CLI flags override selected values. Local top-level fields, including the entire `defaults` object, replace the corresponding shared fields.
+- The strict schema contains `provider`, `workItemProvider`, and `defaults`; provider values are `github` or `gitlab`. Files must be regular, non-symlink files no larger than 64 KiB. Unknown keys and invalid JSON fail closed.
 - `.workctl.local.json` is gitignored. Old `.mcp-tracker*.json` files are not read or migrated.
 - No configuration file is required when the provider and repository can be resolved from flags or the Git remote.
 
@@ -304,13 +322,25 @@ These require a focused architecture decision; this proposal selects no flag, st
 **Acceptance:** HTTPS and SSH GitHub and GitLab remotes resolve to the same repository path; an unknown host, an origin remote that belongs to another provider than the selected one, a `--repo` host that disagrees with the resolved provider, and a missing scope fail closed; explicit overrides take precedence; `group/subgroup/project` is accepted for GitLab and rejected for GitHub.
 **Verification:** Unit tests for resolution and remote parsing.
 
+### RF-CFG.3: GitHub issue defaults and label candidates
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.1, RF-CFG.2
+
+- `defaults.github.issue` accepts `assignees`, `labels`, `labelCandidates`, and optional `project`.
+- `project` contains a canonical GitHub Project URL, exact allowed repository paths, and string-valued custom field defaults. Project membership and fields apply only when the resolved repository is allowlisted.
+- `labelCandidates` is an optional allowlist for the labels passed to DecisionModel when `@auto` is requested. Candidates must exist in the repository; an omitted or empty list uses the full repository catalog.
+- Explicit `--assignee` values replace default assignees. Default labels precede explicit labels, with duplicates removed. Explicit `--project-field NAME=VALUE` overrides the configured value of the same field.
+- When `.workctl.local.json` sets `defaults`, it replaces the shared defaults object as a whole; nested maps are not deep-merged.
+
+**Acceptance:** Strict config rejects unknown keys and malformed project profiles; repository scope prevents defaults crossing repository boundaries; field and label-candidate precedence follows the rules above.
+**Verification:** Config and CLI integration tests with isolated worktree roots.
+
 ### RF-OUT.1: Output contract
 **Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CLI.1
 
 - Success output is compact JSON by default; `--format text` selects human-readable output.
 - Text output escapes terminal control characters in provider values; issue-body newlines and tabs remain layout characters.
-- Errors are one JSON object on stderr with a stable `code` and safe `message`; all failures exit nonzero and leave stdout empty.
-- User-facing errors do not include raw provider stderr, credentials, stack traces, or internal paths.
+- Errors are one JSON object on stderr with a stable `code` and safe `message`; partial success may include structured `details` describing the affected resource and completed/pending operations. All failures exit nonzero and leave stdout empty.
+- User-facing errors do not include raw provider stderr, credentials, stack traces, or internal paths. Partial-success error types remain provider-neutral.
 
 **Acceptance:** Success and failure tests assert output stream, format, and exit status; raw fixture stderr never appears in the error response.
 **Verification:** CLI integration tests.
@@ -334,12 +364,12 @@ These require a focused architecture decision; this proposal selects no flag, st
 - Model requests occur only when issue create/edit includes `@auto` in an existing label argument. Other code-host operations do not send work-item text to a model.
 - The DecisionModel package receives provider-neutral work-item title/description and candidate labels; it excludes credentials, comments, URLs, and unrelated code-host metadata.
 - `DECISION_MODEL_API_KEY` is read only for the selected hosted Jev, Laya, or GLiDE adapter, sent only to its fixed HTTPS endpoint, and never stored, logged, or included in errors.
-- `DECISION_MODEL_BASE_URL` configures local GLiNER or OpenAI-compatible LLM service access and must be loopback. Local adapters do not receive hosted credentials.
+- `DECISION_MODEL_BASE_URL` configures the OpenAI-compatible local LLM service and must be loopback. Local adapters do not receive hosted credentials.
 - Requests and responses are bounded at 2 MiB and 1 MiB. Redirects are disabled. Model failures and malformed/incomplete label scores fail closed with safe errors; no retries occur.
 - Generic LLM scores are generated estimates and are not represented as calibrated model-native probabilities.
 
 **Acceptance:** No model/config/key read occurs without `@auto`; missing hosted credentials fail before code-host access; model inputs exclude unrelated metadata; local non-loopback URLs, oversized payloads, redirects, and invalid scores are rejected without a label write.
-**Verification:** Built-binary isolated code-host fixture, local OpenAI-compatible HTTP fixture, adapter HTTP tests, and local service input validation.
+**Verification:** Built-binary isolated code-host fixture, local OpenAI-compatible HTTP fixture, and adapter HTTP tests.
 
 ### RNF-EXT.1: Bounded subprocess execution
 **Priority:** Must Have | **Status:** Implemented | **Dependencies:** none

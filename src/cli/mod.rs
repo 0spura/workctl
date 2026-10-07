@@ -15,7 +15,7 @@ pub struct GlobalArgs {
     #[arg(long, global = true, value_enum)]
     pub provider: Option<Provider>,
     /// Repository as OWNER/REPO or HOST/OWNER/REPO; GitLab also accepts GROUP/SUBGROUP/PROJECT
-    #[arg(long, global = true, value_name = "REPO")]
+    #[arg(long, short = 'R', global = true, value_name = "REPO")]
     pub repo: Option<String>,
     /// Success output format
     #[arg(long, global = true, value_enum, default_value = "json")]
@@ -76,7 +76,10 @@ pub fn prescan_value(argv: &[OsString], name: &str) -> Option<String> {
         if let Some(value) = token.strip_prefix(&prefix) {
             found = Some(value.to_owned());
         } else if token == name {
-            found = tokens.next().and_then(|value| value.to_str()).map(str::to_owned);
+            found = tokens
+                .next()
+                .and_then(|value| value.to_str())
+                .map(str::to_owned);
         }
     }
     found

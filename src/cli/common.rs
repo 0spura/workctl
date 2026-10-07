@@ -9,10 +9,10 @@ use clap::Args;
 #[derive(Debug, Args)]
 pub struct BodyChangeArgs {
     /// Replace the whole body with this text
-    #[arg(long)]
+    #[arg(long, short = 'b')]
     pub body: Option<String>,
     /// Replace the whole body with a file's contents; `-` reads standard input
-    #[arg(long = "body-file", value_name = "FILE")]
+    #[arg(long = "body-file", short = 'F', value_name = "FILE")]
     pub body_file: Option<String>,
     /// Append this text as a new block
     #[arg(long = "append-body")]

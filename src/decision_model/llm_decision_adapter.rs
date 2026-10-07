@@ -2,9 +2,8 @@ use std::{io::Read, time::Duration};
 
 use serde::{Deserialize, Serialize};
 
-use crate::domain::{AppError, LabelSuggestion};
+use crate::domain::{AppError, DecisionScore};
 
-use super::gliner_decide_adapter::local_url;
 use super::{DecisionInput, ensure_scores};
 
 const DEFAULT_URL: &str = "http://127.0.0.1:11434/v1";
@@ -47,7 +46,7 @@ struct ChatMessage {
 
 #[derive(Deserialize)]
 struct Scores {
-    suggestions: Vec<LabelSuggestion>,
+    suggestions: Vec<DecisionScore>,
 }
 
 pub struct LLMDecisionAdapter;
@@ -56,10 +55,10 @@ impl LLMDecisionAdapter {
     pub fn suggest(
         model: &str,
         input: DecisionInput<'_>,
-    ) -> Result<Vec<LabelSuggestion>, AppError> {
+    ) -> Result<Vec<DecisionScore>, AppError> {
         let url = local_url("/chat/completions", DEFAULT_URL)?;
         let labels = input
-            .labels
+            .candidates
             .iter()
             .map(|label| {
                 format!(
@@ -71,13 +70,13 @@ impl LLMDecisionAdapter {
             .collect::<Vec<_>>()
             .join("\n");
         let context = format!(
-            "Title: {}\nDescription:\n{}\nCandidate labels:\n{}",
+            "Title: {}\nDescription:\n{}\nCandidate choices:\n{}",
             input.title, input.description, labels
         );
         let request = ChatRequest {
             model: model.to_owned(),
             messages: [
-                Message { role: "system", content: "Classify the code work item against only the supplied labels. Return one probability from 0 to 1 for every candidate label. Output JSON only in the shape {\"suggestions\":[{\"label\":string,\"probability\":number}]}. Do not invent labels.".to_owned() },
+                Message { role: "system", content: "Classify the code work item against only the supplied decision candidates. Return one probability from 0 to 1 for every candidate. Each suggestion's label must exactly match the candidate name. Output JSON only in the shape {\"suggestions\":[{\"label\":string,\"probability\":number}]}. Do not invent candidates.".to_owned() },
                 Message { role: "user", content: context },
             ],
             response_format: ResponseFormat { r#type: "json_object" },
@@ -120,6 +119,55 @@ impl LLMDecisionAdapter {
             .as_bytes();
         let parsed: Scores =
             serde_json::from_slice(content).map_err(|_| AppError::decision_response())?;
-        ensure_scores(parsed.suggestions, input.labels)
+        ensure_scores(parsed.suggestions, input.candidates)
+    }
+}
+
+fn local_url(path: &str, default: &str) -> Result<reqwest::Url, AppError> {
+    let raw = std::env::var("DECISION_MODEL_BASE_URL").unwrap_or_else(|_| default.to_owned());
+    local_url_from(&raw, path)
+}
+
+fn local_url_from(raw: &str, path: &str) -> Result<reqwest::Url, AppError> {
+    let mut url = reqwest::Url::parse(raw).map_err(|_| AppError::decision_config())?;
+    if url.scheme() != "http" && url.scheme() != "https" {
+        return Err(AppError::decision_config());
+    }
+    let host = url.host_str().ok_or_else(AppError::decision_config)?;
+    if !(host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback()))
+    {
+        return Err(AppError::decision_config());
+    }
+    let base = url.path().trim_end_matches('/');
+    url.set_path(&format!("{base}{path}"));
+    url.set_query(None);
+    url.set_fragment(None);
+    Ok(url)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::local_url_from;
+
+    #[test]
+    fn local_endpoint_requires_loopback_and_preserves_api_prefix() {
+        let url = local_url_from("http://127.0.0.1:11434/v1/", "/chat/completions")
+            .expect("loopback endpoint");
+        assert_eq!(url.as_str(), "http://127.0.0.1:11434/v1/chat/completions");
+        assert_eq!(
+            local_url_from("http://192.0.2.10:11434/v1", "/chat/completions")
+                .expect_err("remote endpoint")
+                .code,
+            "decision_config"
+        );
+        assert_eq!(
+            local_url_from("https://example.test", "/chat/completions")
+                .expect_err("hosted endpoint")
+                .code,
+            "decision_config"
+        );
     }
 }

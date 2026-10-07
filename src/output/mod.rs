@@ -10,6 +10,7 @@ use crate::domain::{AppError, CheckRun, Issue, IssueSummary, PullRequest, PullRe
 #[serde(untagged)]
 pub enum SuccessOutput {
     Issue(Issue),
+    IssueEdits(Vec<Issue>),
     Issues(Vec<IssueSummary>),
     PullRequest(PullRequest),
     PullRequests(Vec<PullRequestSummary>),

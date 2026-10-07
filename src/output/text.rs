@@ -12,6 +12,11 @@ pub fn write(output: &SuccessOutput) -> Result<(), AppError> {
 fn write_to(stdout: &mut impl Write, output: &SuccessOutput) -> Result<(), AppError> {
     match output {
         SuccessOutput::Issue(issue) => write_issue(stdout, issue)?,
+        SuccessOutput::IssueEdits(issues) => {
+            for issue in issues {
+                write_issue(stdout, issue)?;
+            }
+        }
         SuccessOutput::Issues(issues) => {
             for issue in issues {
                 write!(stdout, "#{} ", issue.number).map_err(|_| AppError::output())?;

@@ -60,7 +60,11 @@ if [ "$1" = "issue" ] && [ "$2" = "list" ]; then
 fi
 if [ "$1" = "issue" ] && [ "$2" = "create" ]; then
     cat > "$WORKCTL_GH_INPUT"
-    printf '%s\n' 'https://github.com/owner/repo/issues/7'
+    if [ "$WORKCTL_GH_MODE" = "project-scope-outside" ]; then
+        printf '%s\n' 'https://github.com/other/repo/issues/7'
+    else
+        printf '%s\n' 'https://github.com/owner/repo/issues/7'
+    fi
     if [ "$WORKCTL_GH_MODE" = "attachment-create-failure" ]; then
         printf '%s\n' 'private provider diagnostic' >&2
         exit 1
@@ -69,6 +73,28 @@ if [ "$1" = "issue" ] && [ "$2" = "create" ]; then
 fi
 if [ "$1" = "issue" ] && [ "$2" = "edit" ]; then
     cat > "$WORKCTL_GH_INPUT"
+    exit 0
+fi
+if [ "$1" = "project" ] && [ "$2" = "item-add" ]; then
+    if [ "$WORKCTL_GH_MODE" = "project-add-failure" ]; then
+        printf '%s\n' 'private project diagnostic' >&2
+        exit 1
+    fi
+    exit 0
+fi
+if [ "$1" = "project" ] && [ "$2" = "item-edit" ]; then
+    if [ "$WORKCTL_GH_MODE" = "project-second-edit-failure" ] && [ "$8" = "NOTES_ID" ]; then
+        printf '%s\n' 'private project diagnostic' >&2
+        exit 1
+    fi
+    if [ "$WORKCTL_GH_MODE" = "project-edit-failure" ]; then
+        printf '%s\n' 'private project diagnostic' >&2
+        exit 1
+    fi
+    exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then
+    printf '%s\n' '{"data":{"repositoryOwner":{"projectV2":{"id":"PVT_owner_project","title":"Roadmap","fields":{"nodes":[{"__typename":"ProjectV2SingleSelectField","id":"PRIORITY_ID","name":"Priority","dataType":"SINGLE_SELECT","options":[{"id":"OPTION_HIGH","name":"High"},{"id":"OPTION_LOW","name":"Low"}]},{"__typename":"ProjectV2Field","id":"EFFORT_ID","name":"Effort","dataType":"NUMBER"},{"__typename":"ProjectV2Field","id":"START_ID","name":"Start date","dataType":"DATE"},{"__typename":"ProjectV2Field","id":"NOTES_ID","name":"Notes","dataType":"TEXT"},{"__typename":"ProjectV2IterationField","id":"ITERATION_ID","name":"Iteration","dataType":"ITERATION","configuration":{"iterations":[{"id":"ITERATION_A","title":"Sprint A"}]}}],"pageInfo":{"hasNextPage":false}}}}}}'
     exit 0
 fi
 if [ "$1" = "api" ] && [ "$2" = "--paginate" ]; then

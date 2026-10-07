@@ -95,7 +95,10 @@ mod tests {
 
     #[test]
     fn treats_a_missing_description_as_an_empty_body() {
-        let payload = OPEN_ISSUE.replace(r#""description": "Steps to reproduce""#, r#""description": null"#);
+        let payload = OPEN_ISSUE.replace(
+            r#""description": "Steps to reproduce""#,
+            r#""description": null"#,
+        );
         assert_eq!(issue(payload.as_bytes()).expect("valid issue").body, "");
     }
 
@@ -119,6 +122,9 @@ mod tests {
         let summaries = issue_summaries(payload.as_bytes()).expect("valid page");
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].number, 12);
-        assert!(matches!(summaries[0].state, crate::domain::IssueState::Open));
+        assert!(matches!(
+            summaries[0].state,
+            crate::domain::IssueState::Open
+        ));
     }
 }

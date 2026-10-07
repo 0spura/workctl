@@ -1,4 +1,5 @@
 pub mod issues;
+mod projects;
 pub mod prs;
 
 use crate::domain::AppError;
@@ -175,7 +176,20 @@ fn parse_due_day(value: &str) -> Option<i64> {
         return None;
     }
     let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-    let month_days = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let month_days = [
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
     if !(1..=month_days[(month - 1) as usize]).contains(&day) {
         return None;
     }

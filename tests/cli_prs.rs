@@ -329,7 +329,7 @@ fn edit_forwards_metadata_flags_and_requires_a_change() {
             .to_string()
     ));
 
-    let unmilestoned = fixture.run_pr(&["pr", "edit", "42", "--clear-milestone"], "");
+    let unmilestoned = fixture.run_pr(&["pr", "edit", "42", "--remove-milestone"], "");
     success_json(&unmilestoned);
     assert!(
         gh_lines(&fixture).contains(&"pr edit 42 --repo owner/repo --remove-milestone".to_string())
@@ -343,7 +343,7 @@ fn edit_forwards_metadata_flags_and_requires_a_change() {
             "42",
             "--milestone",
             "M1",
-            "--clear-milestone",
+            "--remove-milestone",
         ],
         "",
     );

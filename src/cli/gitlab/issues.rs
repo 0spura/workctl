@@ -42,7 +42,11 @@ pub struct CreateArgs {
     #[arg(long)]
     pub description: Option<String>,
     /// Read the description from a file; `-` reads standard input
-    #[arg(long = "description-file", value_name = "FILE", required_unless_present = "description")]
+    #[arg(
+        long = "description-file",
+        value_name = "FILE",
+        required_unless_present = "description"
+    )]
     pub description_file: Option<String>,
     /// Add a label; may be repeated
     #[arg(long = "label", value_name = "NAME", value_parser = common::parse_non_blank)]

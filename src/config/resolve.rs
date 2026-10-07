@@ -86,11 +86,9 @@ pub fn resolve_context(
 
     let repo = match explicit_repo {
         Some(value) => validate_repo(provider, value)?,
-        None => remote
-            .map(|remote| remote.repo)
-            .ok_or(AppError::context(
-                "could not determine a repository; specify --repo",
-            ))?,
+        None => remote.map(|remote| remote.repo).ok_or(AppError::context(
+            "could not determine a repository; specify --repo",
+        ))?,
     };
     Ok(ResolvedContext { repo })
 }

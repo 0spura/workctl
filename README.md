@@ -29,13 +29,28 @@ workctl issue list --state open --limit 30
 workctl issue list --label bug --label p1 --assignee me --search "in:title fix"
 workctl issue view 123
 workctl issue create --title "Crash on save" --body-file report.md --label @auto
+workctl issue create --title "Plan the migration" --project-field "Priority=High" --project-field "Start date=2026-10-07"
 workctl issue edit 123 --title "Updated title" --add-label @auto
 workctl issue edit 123 --title "Updated title" --add-label bug --add-label @auto
 workctl issue edit 123 --append-body "Reproduced on 1.4.2."
 workctl issue edit 123 --replace-section "## Acceptance" --section-body "New criteria"
 workctl issue edit 123 --patch-file body.patch
 workctl issue edit 123 --title "Updated title" --expect-updated-at 2026-01-02T00:00:00Z
+workctl issue edit 123 --project-field "Priority=High" --clear-project-field "Start date"
+workctl issue edit 123 --remove-milestone --type Bug
+workctl issue edit 123 --parent 100 --add-sub-issue 124,125
+workctl issue edit 123 --add-blocked-by 200 --add-blocking 300
+workctl issue edit 123 --remove-parent --remove-blocked-by 200
+workctl issue edit 123 124 -t "Updated title" -R owner/repo
+workctl issue edit https://github.com/owner/repo/issues/123 -b "Updated body"
 ```
+`--project-field` resolves against one configured GitHub Project profile. The schema and option values are discovered dynamically; supported types are text, number, date, single-select, and iteration. Issue creation uses the profile only when the repository is explicitly allowlisted. Explicit `--project` can be paired with fields only when its title matches that profile. The agent still makes one `workctl issue create` call; workctl handles schema lookup, issue creation, Project membership, and field updates internally. If a post-create step fails, a provider-neutral partial-success error identifies the resource and completed/pending operations; workctl does not retry creation.
+
+Issue editing accepts `--project-field NAME=VALUE` and `--clear-project-field NAME` for the same repository-allowlisted profile. It validates all requested fields before writes, never reapplies creation defaults or `autoSelectFields`, and does not automatically add Project membership. Set/clear overlaps and Project removal combined with field changes are rejected. Field-only edits skip `gh issue edit`; combined edits write the issue first, then the fields serially. A failure after any successful write returns `partial_success` with completed/pending operations and no automatic retry. `--expect-updated-at` guards the issue revision, not concurrent changes to Project fields.
+
+GitHub editing follows native `gh` names: `--remove-milestone` replaces `--clear-milestone` without an alias; `--type`/`--remove-type`, parent/sub-issue flags, and blocked-by/blocking flags mutate the corresponding relationships. Relationship values accept issue numbers or canonical GitHub issue URLs; list flags accept repeats or comma-separated values. `--add-blocked-by 200` means issue 200 blocks the edited issue; `--add-blocking 300` means the edited issue blocks issue 300. `--parent` replaces the parent, and `--remove-parent` removes it.
+
+Use native `-t`, `-b`, `-F`, `-m`, and `-R` shortcuts. Multiple edit targets must belong to one repository and are processed serially; success returns an array of full records instead of the single-target object. A later failure reports completed/pending target URLs as `partial_success` and stops without retrying. A successful mutation followed by failed confirmation also reports partial success; inspect GitHub before resuming. Numeric relationship references belong to the selected repository; explicit relationship URLs can name another repository.
 
 Output is compact JSON by default. Add `--format text` for human-readable output; terminal control characters in provider data are escaped, while body newlines and tabs remain readable. Errors are JSON on stderr with a nonzero exit code. `issue list` returns summaries without bodies; `view`, `create`, and `edit` return full issue data. There is no delete command in this release.
 
@@ -56,22 +71,11 @@ input channel, local store and reconciliation flow are not yet selected. Existin
 provide this feature; see the [SRS proposal](docs/srs.md#proposed-extension-rf-wi5-private-semantic-declaration-on-issue-create)
 and [architecture](docs/architecture.md#proposed-private-semantic-declarations).
 
-`issue create --label @auto` and `issue edit NUMBER --add-label @auto` use the selected `DecisionModel` adapter and add qualifying labels alongside manual labels. `@auto` is reserved and cannot be used with `--remove-label`. Issue text and candidate labels are sent to a model only when the marker is present.
+`issue create --label @auto` and `issue edit NUMBER --add-label @auto` use the selected `DecisionModel` adapter and add qualifying labels alongside manual labels. `@auto` is reserved and cannot be used with `--remove-label`. Configure `defaults.github.issue.labelCandidates` to pass only an allowlisted subset of existing repository labels to the model; without it, all repository labels remain candidates. For GitHub issue creation, `defaults.github.issue.project.autoSelectFields` opts specific Project fields into automatic option selection; only single-select and iteration fields are eligible. The configured Project profile is the allowlist, and it receives only dynamically discovered options for those fields. Selection happens in the same model request as `@auto` labels when both are requested. Existing configured or explicit `--project-field` values win; scores below 0.8 leave fields unset. A tied best score or model/configuration failure stops before issue creation.
 
-Set `DECISION_MODEL` to `jev-latest`, `laya`, `fastino/GLiNER2.5-Decide`, `fastino/GLiDE`, or `local/<model-id>`. Jev, Laya, and GLiDE use their native hosted decision APIs and require `DECISION_MODEL_API_KEY`. GLiNER-Decide uses the local Python service below. `local/<model-id>` uses any local server implementing OpenAI-compatible Chat Completions at `DECISION_MODEL_BASE_URL` (default `http://127.0.0.1:11434/v1`); it is not a hosted OpenAI integration.
+Set `DECISION_MODEL` to `jev-latest`, `laya`, `fastino/GLiDE`, or `local/<model-id>`. Jev, Laya, and GLiDE use their native hosted decision APIs and require `DECISION_MODEL_API_KEY`. `local/<model-id>` uses any local server implementing OpenAI-compatible Chat Completions at `DECISION_MODEL_BASE_URL` (default `http://127.0.0.1:11434/v1`); it is not a hosted OpenAI integration and requires no hosted key. Local endpoints must remain on loopback.
 
 Native decision models return model-native probabilities/confidence. Generic LLM scores are generated estimates; JSON output mode does not make them calibrated probabilities. All adapters use the existing `>= 0.8` cutoff, but scores are not assumed comparable across models.
-
-To run GLiNER2.5-Decide locally, install the service dependency and start its loopback server:
-
-```sh
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -r decision-model-server/requirements.txt
-python decision-model-server/server.py --port 8765
-```
-
-The first model load may download weights. The service binds to `127.0.0.1` by default and can load another local GLiNER2-compatible model with `--model`. Local HTTP endpoints must remain on loopback.
 
 ## GitLab issues
 
@@ -164,18 +168,36 @@ Optional strict JSON configuration files are discovered at the Git root and vali
 - `.workctl.json` can be committed for project-wide defaults.
 - `.workctl.local.json` overrides fields locally and is gitignored.
 
-Both files must be regular, non-symlink files no larger than 64 KiB. The only supported fields are `provider` and `workItemProvider`, each with value `github` or `gitlab`. Unknown fields and malformed JSON fail closed. Legacy `.mcp-tracker*.json` configuration is not read or migrated.
+Both files must be regular, non-symlink files no larger than 64 KiB. Supported fields include `provider` and `workItemProvider` (`github` or `gitlab`) plus GitHub issue defaults under `defaults.github.issue`: `assignees`, `labels`, `labelCandidates`, and an optional Project profile with `url`, exact `repositories`, `fields`, and `autoSelectFields`. `autoSelectFields` is a list of exact Project field names whose single-select/iteration options may be selected automatically during issue creation. Local top-level values override shared values; a local `defaults` object replaces the shared defaults object as a whole. Unknown fields and malformed JSON fail closed. Legacy `.mcp-tracker*.json` configuration is not read or migrated.
+
 
 Example:
 
 ```json
 {
-  "workItemProvider": "github"
+  "workItemProvider": "github",
+  "defaults": {
+    "github": {
+      "issue": {
+        "assignees": ["@me"],
+        "labels": ["triaged"],
+        "labelCandidates": ["bug", "documentation"],
+        "project": {
+          "url": "https://github.com/orgs/acme/projects/7",
+          "repositories": ["acme/service"],
+          "autoSelectFields": ["Priority"],
+          "fields": {
+            "Status": "Todo"
+          }
+        }
+      }
+    }
+  }
 }
 ```
 
 ## Safety and scope
 
-GitHub operations use `gh` argument arrays and GitLab operations use `glab` argument arrays; create/edit bodies travel on stdin. Attachments use documented `gh --attach` support; no private upload endpoints are called. DecisionModel requests occur only for `@auto`, send only work-item title/description and candidate labels, and never include credentials in prompts. Hosted adapters use their native authentication headers and fixed HTTPS endpoints. Local model URLs are restricted to loopback; errors do not expose credentials, raw provider diagnostics, stack traces, or internal paths. No shell or automatic `gh`/`glab` download is used.
+GitHub operations use `gh` argument arrays and GitLab operations use `glab` argument arrays; create/edit bodies travel on stdin. Attachments use documented `gh --attach` support; no private upload endpoints are called. DecisionModel runs for `@auto` labels or when an allowlisted Project field needs automatic selection. It receives only work-item title/description and configured candidates (repository labels and dynamically discovered Project options), never credentials or unrelated metadata. Hosted adapters use their native authentication headers and fixed HTTPS endpoints. Local model URLs are restricted to loopback; errors do not expose credentials, raw provider diagnostics, stack traces, or internal paths. No shell or automatic `gh`/`glab` download is used.
 
-The decision-model package is independent of code-host provider implementation. Its native adapters and generic local LLM adapter share one validated input/output contract; any code-host provider can call the same package. The current CLI implements GitHub issues and pull requests plus GitLab issue reads. See [requirements](docs/srs.md), [architecture](docs/architecture.md), [ADR-0015](docs/adr/0015-provider-neutral-decision-model-package.md), and prior [ADRs](docs/architecture.md#module-map).
+The decision-model package is independent of code-host provider implementation. Its native adapters and generic local LLM adapter share one validated input/output contract; any code-host provider can call the same package. The current CLI implements GitHub issues and pull requests plus GitLab issue reads. See [requirements](docs/srs.md), [architecture](docs/architecture.md), [ADR-0015](docs/adr/0015-provider-neutral-decision-model-package.md), [ADR-0020](docs/adr/0020-remove-gliner-python-server.md), and prior [ADRs](docs/architecture.md#module-map).

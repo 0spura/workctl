@@ -1,12 +1,33 @@
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct AppError {
     pub code: &'static str,
     pub message: &'static str,
+    pub details: Option<serde_json::Value>,
 }
 
 impl AppError {
     pub const fn new(code: &'static str, message: &'static str) -> Self {
-        Self { code, message }
+        Self {
+            code,
+            message,
+            details: None,
+        }
+    }
+
+    pub fn partial_success(
+        resource: serde_json::Value,
+        completed: &[String],
+        pending: &[String],
+    ) -> Self {
+        Self {
+            code: "partial_success",
+            message: "the operation completed partially; inspect the reported resource before retrying",
+            details: Some(serde_json::json!({
+                "resource": resource,
+                "completed": completed,
+                "pending": pending,
+            })),
+        }
     }
 
     pub const fn invalid_input(message: &'static str) -> Self {

@@ -5,6 +5,7 @@
 - Tracker: [issue #8](https://github.com/0spura/workctl/issues/8)
 - Supersedes: [ADR-0010](./0010-automatic-issue-labels.md) for the automatic-label opt-in and backend contract; Jev's 0.8 selection policy remains.
 - Superseded by: [ADR-0015](./0015-provider-neutral-decision-model-package.md) for adapter package structure and the local-model contract. The `@auto` sentinel decision carries forward.
+- GLiNER local service superseded by: [ADR-0020](./0020-remove-gliner-python-server.md), which withdraws the bundled Python service and its adapter.
 
 ## Context
 

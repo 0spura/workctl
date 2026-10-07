@@ -79,7 +79,7 @@ pub(super) fn execute(globals: &GlobalArgs, args: PrArgs) -> Result<(), AppError
         PrAction::Edit(args) => {
             if args.clear_milestone && args.milestone.is_some() {
                 return Err(AppError::invalid_input(
-                    "--milestone and --clear-milestone cannot be used together",
+                    "--milestone and --remove-milestone cannot be used together",
                 ));
             }
             let change = support::body_change(&args.change)?;
@@ -167,7 +167,10 @@ fn merge_method(method: MergeMethodArg) -> MergeMethod {
 }
 
 fn provider(globals: &GlobalArgs) -> Result<GitHubPulls, AppError> {
-    let provider = GitHubPulls::new(support::resolve_repo(globals.provider, globals.repo.as_deref())?);
+    let provider = GitHubPulls::new(support::resolve_repo(
+        globals.provider,
+        globals.repo.as_deref(),
+    )?);
     provider.authenticate()?;
     Ok(provider)
 }

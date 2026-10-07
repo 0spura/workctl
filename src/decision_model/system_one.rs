@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, io::Read, time::Duration};
 
 use serde::{Deserialize, Serialize};
 
-use crate::domain::{AppError, LabelSuggestion, RepositoryLabel};
+use crate::domain::{AppError, DecisionCandidate, DecisionScore};
 
 use super::{DecisionInput, ensure_scores};
 
@@ -27,7 +27,7 @@ struct Request<'a> {
 #[derive(Serialize)]
 struct State<'a> {
     work_item: WorkItem<'a>,
-    labels: &'a [RepositoryLabel],
+    labels: &'a [DecisionCandidate],
 }
 
 #[derive(Serialize)]
@@ -63,17 +63,17 @@ pub fn suggest(
     api_key: &str,
     input: DecisionInput<'_>,
     max_questions: usize,
-) -> Result<Vec<LabelSuggestion>, AppError> {
-    if input.labels.len() > max_questions {
+) -> Result<Vec<DecisionScore>, AppError> {
+    if input.candidates.len() > max_questions {
         return Err(AppError::decision_input_limit());
     }
-    let questions = input.labels.iter().enumerate().map(|(index, label)| {
+    let questions = input.candidates.iter().enumerate().map(|(index, candidate)| {
         let mut criteria = BTreeMap::new();
-        criteria.insert("true", "The code work item clearly fits this existing label.");
-        criteria.insert("false", "The code work item does not clearly fit this existing label.");
+        criteria.insert("true", "The code work item clearly matches this decision candidate.");
+        criteria.insert("false", "The code work item does not clearly match this decision candidate.");
         (format!("label_{index}"), Question {
             kind: "noul",
-            instructions: format!("Should this code work item receive the existing repository label {:?}? Use its description as the intended meaning. Recommend only a clear semantic match.", label.name),
+            instructions: format!("Should this code work item use the decision candidate {:?}? Use its description as the intended meaning. Recommend only a clear semantic match.", candidate.name),
             criteria,
         })
     }).collect();
@@ -84,7 +84,7 @@ pub fn suggest(
                 title: input.title,
                 description: input.description,
             },
-            labels: input.labels,
+            labels: input.candidates,
         },
         questions,
     };
@@ -126,8 +126,8 @@ pub fn suggest(
     }
     let response: Response =
         serde_json::from_slice(&bytes).map_err(|_| AppError::decision_response())?;
-    let mut scores = Vec::with_capacity(input.labels.len());
-    for (index, label) in input.labels.iter().enumerate() {
+    let mut scores = Vec::with_capacity(input.candidates.len());
+    for (index, candidate) in input.candidates.iter().enumerate() {
         let answer = response
             .answers
             .get(&format!("label_{index}"))
@@ -135,12 +135,12 @@ pub fn suggest(
         if answer.kind != "noul" {
             return Err(AppError::decision_response());
         }
-        scores.push(LabelSuggestion {
-            label: label.name.clone(),
+        scores.push(DecisionScore {
+            candidate: candidate.name.clone(),
             probability: answer.noul,
         });
     }
-    ensure_scores(scores, input.labels)
+    ensure_scores(scores, input.candidates)
 }
 
 #[cfg(test)]
@@ -153,7 +153,7 @@ mod tests {
 
     use super::{Auth, suggest};
     use crate::decision_model::DecisionInput;
-    use crate::domain::RepositoryLabel;
+    use crate::domain::DecisionCandidate;
 
     #[test]
     fn native_request_uses_selected_auth_and_validates_noul_scores() {
@@ -195,7 +195,7 @@ mod tests {
                 response
             ).expect("write response");
         });
-        let labels = [RepositoryLabel {
+        let candidates = [DecisionCandidate {
             name: "bug".to_owned(),
             description: Some("Build failures".to_owned()),
         }];
@@ -207,13 +207,13 @@ mod tests {
             DecisionInput {
                 title: "Build fails",
                 description: "CI reports a compile error",
-                labels: &labels,
+                candidates: &candidates,
             },
             255,
         )
         .expect("validated response");
         server.join().expect("fixture server");
-        assert_eq!(scores[0].label, "bug");
+        assert_eq!(scores[0].candidate, "bug");
         assert_eq!(scores[0].probability, 0.8);
     }
 }

@@ -12,10 +12,47 @@ const LOCAL_FILE: &str = ".workctl.local.json";
 
 const MAX_CONFIG_BYTES: usize = 64 * 1024;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Config {
     pub provider: Option<Provider>,
     pub work_item_provider: Option<Provider>,
+    pub defaults: Option<Defaults>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Defaults {
+    pub github: Option<GithubDefaults>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GithubDefaults {
+    pub issue: Option<GithubIssueDefaults>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GithubIssueDefaults {
+    #[serde(default)]
+    pub assignees: Vec<String>,
+    #[serde(default)]
+    pub labels: Vec<String>,
+    #[serde(default)]
+    pub label_candidates: Vec<String>,
+    pub project: Option<GithubProjectDefaults>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GithubProjectDefaults {
+    pub url: String,
+    pub repositories: Vec<String>,
+    #[serde(default)]
+    pub fields: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub auto_select_fields: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -23,13 +60,93 @@ pub struct Config {
 struct ConfigFile {
     provider: Option<Provider>,
     work_item_provider: Option<Provider>,
+    defaults: Option<Defaults>,
 }
 
 pub fn load(root: &Path) -> Result<Config, AppError> {
     let mut config = Config::default();
     merge_file(root.join(SHARED_FILE), &mut config)?;
     merge_file(root.join(LOCAL_FILE), &mut config)?;
+    validate(&config)?;
     Ok(config)
+}
+
+fn validate(config: &Config) -> Result<(), AppError> {
+    let Some(issue) = config
+        .defaults
+        .as_ref()
+        .and_then(|defaults| defaults.github.as_ref())
+        .and_then(|github| github.issue.as_ref())
+    else {
+        return Ok(());
+    };
+    if issue.assignees.iter().any(|value| value.trim().is_empty())
+        || issue
+            .labels
+            .iter()
+            .any(|value| value.trim().is_empty() || value == "@auto")
+        || issue
+            .label_candidates
+            .iter()
+            .any(|value| value.trim().is_empty() || value == "@auto")
+        || has_duplicates(&issue.label_candidates)
+    {
+        return Err(AppError::config(
+            "GitHub issue defaults contain an invalid value",
+        ));
+    }
+    if let Some(project) = issue.project.as_ref() {
+        if !valid_project_url(&project.url)
+            || project.repositories.is_empty()
+            || project
+                .repositories
+                .iter()
+                .any(|repo| !valid_repository_path(repo))
+            || project.fields.iter().any(|(name, value)| {
+                name.trim().is_empty() || name.contains('=') || value.trim().is_empty()
+            })
+            || project.auto_select_fields.iter().any(|name| {
+                name.trim().is_empty() || name.contains('=')
+            })
+            || has_duplicates(&project.auto_select_fields)
+        {
+            return Err(AppError::config("GitHub Project defaults are invalid"));
+        }
+    }
+    Ok(())
+}
+
+fn has_duplicates(values: &[String]) -> bool {
+    let mut seen = std::collections::HashSet::with_capacity(values.len());
+    values.iter().any(|value| !seen.insert(value))
+}
+fn valid_project_url(url: &str) -> bool {
+    let Some(path) = url.strip_prefix("https://github.com/") else {
+        return false;
+    };
+    let parts = path.trim_end_matches('/').split('/').collect::<Vec<_>>();
+    parts.len() == 4
+        && matches!(parts[0], "orgs" | "users")
+        && !parts[1].is_empty()
+        && parts[1]
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        && parts[2] == "projects"
+        && parts[3].parse::<u64>().is_ok_and(|number| number > 0)
+        && !url.contains('?')
+        && !url.contains('#')
+}
+
+fn valid_repository_path(repo: &str) -> bool {
+    let parts = repo.split('/').collect::<Vec<_>>();
+    parts.len() == 2
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && part.bytes().all(valid_repo_byte))
+}
+
+fn valid_repo_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
 }
 
 fn merge_file(path: impl AsRef<Path>, config: &mut Config) -> Result<(), AppError> {
@@ -43,6 +160,9 @@ fn merge_file(path: impl AsRef<Path>, config: &mut Config) -> Result<(), AppErro
     }
     if file.work_item_provider.is_some() {
         config.work_item_provider = file.work_item_provider;
+    }
+    if file.defaults.is_some() {
+        config.defaults = file.defaults;
     }
     Ok(())
 }
@@ -144,11 +264,40 @@ mod tests {
         assert_eq!(config.provider, Some(Provider::Gitlab));
         assert_eq!(config.work_item_provider, Some(Provider::Github));
     }
+    #[test]
+    fn local_defaults_replace_shared_defaults_as_one_object() {
+        let root = TempRoot::new();
+        fs::write(
+            root.0.join(".workctl.json"),
+            r#"{"defaults":{"github":{"issue":{"labels":["shared"],"labelCandidates":["bug"]}}}}"#,
+        )
+        .expect("write shared config");
+        fs::write(
+            root.0.join(".workctl.local.json"),
+            r#"{"defaults":{"github":{"issue":{"labelCandidates":["docs"]}}}}"#,
+        )
+        .expect("write local config");
+
+        let config = load(&root.0).expect("load valid config");
+        let issue = config
+            .defaults
+            .expect("defaults")
+            .github
+            .expect("GitHub defaults")
+            .issue
+            .expect("issue defaults");
+        assert!(issue.labels.is_empty());
+        assert_eq!(issue.label_candidates, ["docs"]);
+    }
 
     #[test]
     fn malformed_and_unknown_configuration_fails_closed() {
         let root = TempRoot::new();
-        for contents in [r#"{"provider":"invalid"}"#, r#"{"repo":"owner/repo"}"#] {
+        for contents in [
+            r#"{"defaults":{"github":{"issue":{"labelCandidates":["@auto"]}}}}"#,
+            r#"{"defaults":{"github":{"issue":{"project":{"url":"https://github.com/orgs/owner/projects/3","repositories":["owner/repo"],"autoSelectFields":["Priority","Priority"]}}}}}"#,
+            r#"{"defaults":{"github":{"issue":{"project":{"url":"https://github.com/orgs/owner/projects/3","repositories":["owner/repo"],"autoSelectFields":[""]}}}}}"#,
+        ] {
             fs::write(root.0.join(".workctl.json"), contents).expect("write invalid config");
             assert_eq!(load(&root.0).unwrap_err().code, "config");
         }

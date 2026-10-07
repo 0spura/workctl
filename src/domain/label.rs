@@ -6,8 +6,15 @@ pub struct RepositoryLabel {
     pub description: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct LabelSuggestion {
-    pub label: String,
+#[derive(Debug, Clone, Serialize)]
+pub struct DecisionCandidate {
+    pub name: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DecisionScore {
+    #[serde(rename = "label")]
+    pub candidate: String,
     pub probability: f64,
 }
