@@ -58,6 +58,14 @@ pub fn command_tree(provider: Provider) -> Command {
     // after the subcommands are attached.
     root.version(env!("CARGO_PKG_VERSION"))
         .about("Manage GitHub and GitLab work items from the terminal")
+        .after_help(
+            "Provider resolution happens before command parsing:\n\
+             1. `--provider` overrides project configuration.\n\
+             2. Otherwise `workItemProvider`, then `provider`, from `.workctl.json` and \
+             `.workctl.local.json` are used; the local file overrides the same keys in the shared file.\n\
+             3. Otherwise the Git origin host selects the provider.\n\
+             The selected provider determines the command grammar.",
+        )
 }
 
 /// Reads the last value of a global flag from the raw arguments, before parsing.

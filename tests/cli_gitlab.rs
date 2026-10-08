@@ -335,3 +335,37 @@ fn gitlab_write_uncertainty_hides_diagnostics_and_rejects_untrusted_create_url()
     assert_eq!(fixture.glab_invocations().len(), 2);
 }
 
+/// RF-CLI.1: root help documents provider selection and describes each provider's groups.
+#[test]
+fn root_help_documents_resolution_order_and_provider_groups() {
+    let fixture = Fixture::new();
+
+    let github = fixture.run(&["--provider", "github", "--help"], "");
+    assert!(github.status.success());
+    let github_help = String::from_utf8_lossy(&github.stdout);
+    assert!(github_help.starts_with("Manage GitHub and GitLab work items"));
+    assert!(github_help.contains("Provider resolution happens before command parsing"));
+    assert!(github_help.contains("`--provider` overrides project configuration"));
+    assert!(github_help.contains("`workItemProvider`, then `provider`"));
+    assert!(github_help.contains(".workctl.json"));
+    assert!(github_help.contains(".workctl.local.json"));
+    assert!(github_help.contains("local file overrides the same keys"));
+    assert!(github_help.contains("Git origin host selects the provider"));
+    assert!(github_help.lines().any(|line| {
+        line.trim_start().starts_with("issue ") && line.contains("Manage GitHub issues")
+    }));
+    assert!(github_help.lines().any(|line| {
+        line.trim_start().starts_with("pr ") && line.contains("Manage GitHub pull requests")
+    }));
+
+    let gitlab = fixture.run_gitlab(&["--help"], "");
+    assert!(gitlab.status.success());
+    let gitlab_help = String::from_utf8_lossy(&gitlab.stdout);
+    assert!(gitlab_help.starts_with("Manage GitHub and GitLab work items"));
+    assert!(gitlab_help.contains("Provider resolution happens before command parsing"));
+    assert!(gitlab_help.lines().any(|line| {
+        line.trim_start().starts_with("issue ") && line.contains("Manage GitLab issues")
+    }));
+    assert!(!gitlab_help.lines().any(|line| line.trim_start().starts_with("pr ")));
+    assert!(fixture.glab_invocations().is_empty());
+}
