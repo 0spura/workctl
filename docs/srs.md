@@ -23,7 +23,7 @@ Actors: a developer or coding agent running `workctl` locally. Observable behavi
 **Verification:** CLI integration test.
 
 ### RF-WI.1: Create an issue
-**Priority:** Must Have | **Status:** In Progress | **Dependencies:** RF-CFG.1, RF-PRV.1
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.1, RF-PRV.1
 
 - `create` requires a nonblank title, accepts an optional body from `--body` or `--body-file FILE` (`-` reads standard input), and optionally accepts repeated `--assignee`, `--label`, `--project`, one `--milestone`, repeated `--attach FILE[#ALT]`.
 - `--label @auto` opts into automatic label selection through the provider-neutral `DecisionModel` package. It may be combined with manual `--label` values. Only labels with scores >= 0.8 are added.
@@ -534,7 +534,7 @@ Edit regressions `project_auto_edit_selects_only_requested_fields_and_preserves_
 **Verification:** Payload-safety test and source review.
 
 ### RNF-SEC.2: DecisionModel credential and data boundary
-**Priority:** Must Have | **Status:** In Progress | **Dependencies:** RF-WI.1, RF-WI.4
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-WI.1, RF-WI.4
 
 - Model requests occur only for issue create/edit automatic labels or opted-in Project field selection. Other operations do not send work-item text to a model.
 - The DecisionModel package receives provider-neutral work-item title/description and named candidates. Credentials and unrelated code-host metadata are not fetched for model context.
@@ -592,7 +592,7 @@ Edit regressions `project_auto_edit_selects_only_requested_fields_and_preserves_
 - Inline review comments: `pr review` submits one top-level approve, request-changes, or comment; `pr comment` and `issue comment` each add one top-level comment; `pr close`/`pr reopen` and `issue close`/`issue reopen` accept a single comment.
 - Reading, listing, editing, or deleting existing comments and their threads; comment attachments; and alternate comment targets such as review-comment replies.
 - Listing the pull requests linked to an issue.
-- Relationships, checklists, and issue-comment threads.
+- Checklists. GitHub relationship reads and edits are supported by `issue view`, `issue blockers`, and `issue edit`; a decision model never proposes relationships (ADR-0027).
 - Attachment listing, removal, or download; upload to issues/PRs is through `gh` 2.99.0 or newer.
 - Issue deletion (there is no delete command for issues or pull requests), interactive prompts, MCP transport, arbitrary HTTP integrations, generalized token management, automatic retries, telemetry, and pull-request automatic label assignment.
 - Three-way merge or fuzzy patch application: a patch either matches the fetched body exactly or fails.
