@@ -65,6 +65,7 @@ pub enum PrAction {
     Checkout(CheckoutArgs),
     /// List pull request summaries (never bodies)
     List(ListArgs),
+    /// View one pull request with its body
     View(ViewArgs),
     /// Summarize review, mergeability, and required-check evidence
     Status(StatusArgs),
