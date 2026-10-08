@@ -35,7 +35,7 @@ pub fn run(
     run_with_deadline(program, args, input, cwd, DEADLINE)
 }
 
-fn run_with_deadline(
+pub(crate) fn run_with_deadline(
     program: &str,
     args: &[String],
     input: Option<Vec<u8>>,
@@ -171,7 +171,7 @@ fn drain<R: Read>(mut reader: R, capture: bool) -> Result<(Vec<u8>, bool), Proce
 mod tests {
     use std::time::{Duration, Instant};
 
-    use super::{MAX_CAPTURE_BYTES, ProcessError, run_with_deadline};
+    use super::{run_with_deadline, ProcessError, MAX_CAPTURE_BYTES};
 
     #[test]
     fn terminates_a_child_at_the_deadline() {

@@ -105,6 +105,29 @@ impl ProjectPlan {
         scores: &[crate::domain::DecisionScore],
         threshold: f64,
     ) -> Result<(), AppError> {
+        self.select_scores(scores, threshold, false)
+    }
+
+    pub(super) fn choose_for_edit(
+        &mut self,
+        scores: &[crate::domain::DecisionScore],
+        threshold: f64,
+    ) -> Result<(), AppError> {
+        self.assignments.retain(|assignment| {
+            !self
+                .choices
+                .iter()
+                .any(|choice| choice.name == assignment.name)
+        });
+        self.select_scores(scores, threshold, true)
+    }
+
+    fn select_scores(
+        &mut self,
+        scores: &[crate::domain::DecisionScore],
+        threshold: f64,
+        preserve_on_tie: bool,
+    ) -> Result<(), AppError> {
         let mut chosen = Vec::with_capacity(self.choices.len());
         for choice in &self.choices {
             let mut best: Option<(&FieldOption, f64)> = None;
@@ -132,6 +155,9 @@ impl ProjectPlan {
                 }
             }
             if tied {
+                if preserve_on_tie {
+                    continue;
+                }
                 return Err(AppError::invalid_input(
                     "the decision model tied on a GitHub Project field option",
                 ));
@@ -148,7 +174,11 @@ impl ProjectPlan {
 
     /// Records the model's choice as a validated field write.
     pub(super) fn choose(&mut self, candidate: &str) -> Result<(), AppError> {
-        let Some(choice) = self.choices.iter().find(|choice| choice.has_option(candidate)) else {
+        let Some(choice) = self
+            .choices
+            .iter()
+            .find(|choice| choice.has_option(candidate))
+        else {
             return Err(AppError::provider_response());
         };
         let option = choice
@@ -280,9 +310,9 @@ pub(super) fn prepare(
 
 /// Discovers the configured Project and validates the fields an edit explicitly sets or clears.
 ///
-/// An edit applies only what the caller named: `autoSelectFields` is never consulted, so a field
-/// edit can neither reapply a configured value nor trigger model selection. `expected_title`,
-/// when set, is the explicit `--add-project` title and must match the discovered Project.
+/// An edit applies only explicitly named fields, including `NAME=@auto`; configured
+/// defaults and `autoSelectFields` are never reapplied. `expected_title`, when set,
+/// is the explicit `--add-project` title and must match the discovered Project.
 pub(super) fn prepare_edit(
     profile: &GithubProjectDefaults,
     sets: &[(String, String)],
@@ -296,7 +326,17 @@ pub(super) fn prepare_edit(
             "--add-project does not match the configured Project profile",
         ));
     }
-    let mut assignments = resolve_assignments(&project.fields, sets)?;
+    let mut manual = Vec::new();
+    let mut automatic = Vec::new();
+    for (name, value) in sets {
+        if value == "@auto" {
+            automatic.push(name.clone());
+        } else {
+            manual.push((name.clone(), value.clone()));
+        }
+    }
+    let choices = resolve_choices(&project.fields, &automatic, &manual)?;
+    let mut assignments = resolve_assignments(&project.fields, &manual)?;
     assignments.extend(resolve_clears(&project.fields, clears)?);
     Ok(ProjectPlan {
         url: profile.url.clone(),
@@ -304,7 +344,7 @@ pub(super) fn prepare_edit(
         owner,
         number,
         assignments,
-        choices: Vec::new(),
+        choices,
     })
 }
 
@@ -367,12 +407,13 @@ fn resolve_choices(
 ) -> Result<Vec<ProjectFieldChoice>, AppError> {
     let mut choices = Vec::with_capacity(selectable.len());
     for name in selectable {
-        let field = fields
-            .iter()
-            .find(|field| field.name == *name)
-            .ok_or(AppError::invalid_input(
-                "a configured automatically selected GitHub Project field does not exist",
-            ))?;
+        let field =
+            fields
+                .iter()
+                .find(|field| field.name == *name)
+                .ok_or(AppError::invalid_input(
+                    "a configured automatically selected GitHub Project field does not exist",
+                ))?;
         let (kind, options) = match (field.typename.as_str(), field.data_type.as_str()) {
             ("ProjectV2SingleSelectField", "SINGLE_SELECT") => (
                 FieldKind::SingleSelect,
@@ -672,11 +713,7 @@ mod tests {
     // RF-WI.6: Only a tie at the final maximum is ambiguous, regardless of option order.
     #[test]
     fn unique_best_option_wins_over_lower_ties_in_every_order() {
-        for values in [
-            [0.8, 0.8, 0.9],
-            [0.8, 0.9, 0.8],
-            [0.9, 0.8, 0.8],
-        ] {
+        for values in [[0.8, 0.8, 0.9], [0.8, 0.9, 0.8], [0.9, 0.8, 0.8]] {
             let mut plan = choice_plan();
             let scores = scores(values);
             plan.choose_from_scores(&scores, 0.8).unwrap();
@@ -692,22 +729,45 @@ mod tests {
     // RF-WI.6: A qualifying maximum tie fails without recording any assignment.
     #[test]
     fn tied_maximum_is_rejected_in_every_order() {
-        for values in [
-            [0.9, 0.9, 0.8],
-            [0.9, 0.8, 0.9],
-            [0.8, 0.9, 0.9],
-        ] {
+        for values in [[0.9, 0.9, 0.8], [0.9, 0.8, 0.9], [0.8, 0.9, 0.9]] {
             let mut plan = choice_plan();
             assert!(plan.choose_from_scores(&scores(values), 0.8).is_err());
             assert!(plan.assignments.is_empty());
         }
     }
 
+    // RF-WI.6: Reusing a batch edit plan never carries a prior target's automatic choice.
+    #[test]
+    fn edit_choices_reset_between_targets_and_preserve_manual_assignments() {
+        let mut plan = choice_plan();
+        plan.assignments.push(ProjectFieldAssignment {
+            name: "Notes".to_owned(),
+            field_id: "notes".to_owned(),
+            kind: FieldKind::Text,
+            input: FieldInput::Text("manual".to_owned()),
+        });
+        plan.choose_for_edit(&scores([0.9, 0.1, 0.1]), 0.8).unwrap();
+        assert!(matches!(&plan.assignments[1].input, FieldInput::Id(id) if id == "option-0"));
+        plan.choose_for_edit(&scores([0.1, 0.9, 0.1]), 0.8).unwrap();
+        assert_eq!(plan.assignments.len(), 2);
+        assert!(matches!(&plan.assignments[1].input, FieldInput::Id(id) if id == "option-1"));
+        plan.choose_for_edit(&scores([0.9, 0.9, 0.1]), 0.8).unwrap();
+        assert_eq!(plan.assignments.len(), 1);
+        assert!(matches!(&plan.assignments[0].input, FieldInput::Text(text) if text == "manual"));
+        plan.choose_for_edit(&scores([0.79, 0.2, 0.1]), 0.8)
+            .unwrap();
+        assert_eq!(plan.assignments.len(), 1);
+    }
+
     fn scores(values: [f64; 3]) -> Vec<DecisionScore> {
-        values.into_iter().enumerate().map(|(index, probability)| DecisionScore {
-            candidate: format!("Priority={index}"),
-            probability,
-        }).collect()
+        values
+            .into_iter()
+            .enumerate()
+            .map(|(index, probability)| DecisionScore {
+                candidate: format!("Priority={index}"),
+                probability,
+            })
+            .collect()
     }
 
     fn choice_plan() -> ProjectPlan {
@@ -721,11 +781,13 @@ mod tests {
                 name: "Priority".to_owned(),
                 field_id: "priority".to_owned(),
                 kind: FieldKind::SingleSelect,
-                options: (0..3).map(|index| FieldOption {
-                    candidate: format!("Priority={index}"),
-                    title: index.to_string(),
-                    id: format!("option-{index}"),
-                }).collect(),
+                options: (0..3)
+                    .map(|index| FieldOption {
+                        candidate: format!("Priority={index}"),
+                        title: index.to_string(),
+                        id: format!("option-{index}"),
+                    })
+                    .collect(),
             }],
         }
     }

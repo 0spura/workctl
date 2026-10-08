@@ -1,6 +1,6 @@
 use crate::domain::{AppError, Issue, IssueSummary};
+use crate::providers::gitlab::issues::{mapping, GitLabIssues};
 use crate::providers::IssueQuery;
-use crate::providers::gitlab::issues::{GitLabIssues, mapping};
 
 pub(super) fn list(
     provider: &GitLabIssues,

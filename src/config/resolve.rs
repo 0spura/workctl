@@ -202,7 +202,7 @@ mod tests {
     use std::process::Command;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use super::{Provider, parse_remote, resolve_context, select_provider, validate_repo};
+    use super::{parse_remote, resolve_context, select_provider, validate_repo, Provider};
 
     static NEXT_DIR: AtomicUsize = AtomicUsize::new(0);
 
@@ -228,27 +228,23 @@ mod tests {
     #[test]
     fn resolves_config_remote_and_explicit_precedence() {
         let root = TempRoot::new();
-        assert!(
-            Command::new("git")
-                .args(["init", "--quiet"])
-                .current_dir(&root.0)
-                .status()
-                .expect("run git init")
-                .success()
-        );
-        assert!(
-            Command::new("git")
-                .args([
-                    "remote",
-                    "add",
-                    "origin",
-                    "git@github.com:remote-owner/remote-repo.git",
-                ])
-                .current_dir(&root.0)
-                .status()
-                .expect("add origin")
-                .success()
-        );
+        assert!(Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(&root.0)
+            .status()
+            .expect("run git init")
+            .success());
+        assert!(Command::new("git")
+            .args([
+                "remote",
+                "add",
+                "origin",
+                "git@github.com:remote-owner/remote-repo.git",
+            ])
+            .current_dir(&root.0)
+            .status()
+            .expect("add origin")
+            .success());
         fs::write(
             root.0.join(".workctl.json"),
             r#"{"provider":"gitlab","workItemProvider":"github"}"#,
@@ -371,22 +367,18 @@ mod tests {
     #[test]
     fn fails_closed_when_the_remote_belongs_to_another_provider() {
         let root = TempRoot::new();
-        assert!(
-            Command::new("git")
-                .args(["init", "--quiet"])
-                .current_dir(&root.0)
-                .status()
-                .expect("run git init")
-                .success()
-        );
-        assert!(
-            Command::new("git")
-                .args(["remote", "add", "origin", "git@github.com:owner/repo.git"])
-                .current_dir(&root.0)
-                .status()
-                .expect("add origin")
-                .success()
-        );
+        assert!(Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(&root.0)
+            .status()
+            .expect("run git init")
+            .success());
+        assert!(Command::new("git")
+            .args(["remote", "add", "origin", "git@github.com:owner/repo.git"])
+            .current_dir(&root.0)
+            .status()
+            .expect("add origin")
+            .success());
         assert_eq!(
             resolve_context(Some(Provider::Gitlab), None, &root.0)
                 .unwrap_err()
@@ -401,24 +393,20 @@ mod tests {
     #[test]
     fn selects_the_grammar_provider_before_parsing() {
         let root = TempRoot::new();
-        assert!(
-            Command::new("git")
-                .args(["init", "--quiet"])
-                .current_dir(&root.0)
-                .status()
-                .expect("run git init")
-                .success()
-        );
+        assert!(Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(&root.0)
+            .status()
+            .expect("run git init")
+            .success());
         assert_eq!(select_provider(None, &root.0), Provider::Github);
         assert_eq!(select_provider(Some("gitlab"), &root.0), Provider::Gitlab);
-        assert!(
-            Command::new("git")
-                .args(["remote", "add", "origin", "git@gitlab.com:g/p.git"])
-                .current_dir(&root.0)
-                .status()
-                .expect("add origin")
-                .success()
-        );
+        assert!(Command::new("git")
+            .args(["remote", "add", "origin", "git@gitlab.com:g/p.git"])
+            .current_dir(&root.0)
+            .status()
+            .expect("add origin")
+            .success());
         assert_eq!(select_provider(None, &root.0), Provider::Gitlab);
         assert_eq!(select_provider(Some("bogus"), &root.0), Provider::Gitlab);
         fs::write(root.0.join(".workctl.json"), r#"{"provider":"github"}"#)

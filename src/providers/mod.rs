@@ -1,8 +1,11 @@
 pub mod github;
 pub mod gitlab;
 
-use crate::domain::{AppError, CheckRun, Issue, IssueSummary, PullRequest, PullRequestSummary};
+use crate::domain::{
+    AppError, CheckRun, Issue, IssueSummary, PullRequest, PullRequestStatus, PullRequestSummary,
+};
 
+use std::time::Duration;
 /// Bounded query for issue summaries. Every set field maps to one provider filter.
 #[derive(Debug)]
 pub struct IssueQuery {
@@ -168,6 +171,26 @@ pub trait WorkItemProvider {
     fn create(&self, issue: &NewIssue) -> Result<Issue, AppError>;
     fn list(&self, query: &IssueQuery) -> Result<Vec<IssueSummary>, AppError>;
     fn show(&self, number: u64) -> Result<Issue, AppError>;
+    fn close(
+        &self,
+        number: u64,
+        comment: Option<&str>,
+        reason: Option<&str>,
+        duplicate_of: Option<&str>,
+    ) -> Result<(), AppError>;
+    fn reopen(&self, number: u64, comment: Option<&str>) -> Result<(), AppError>;
+    fn comment(&self, number: u64, body: &str) -> Result<(), AppError>;
+    fn lock(&self, number: u64, reason: Option<&str>) -> Result<(), AppError>;
+    fn unlock(&self, number: u64) -> Result<(), AppError>;
+}
+
+#[derive(Debug, Default)]
+pub struct PrChecksOptions {
+    pub required: bool,
+    pub watch: bool,
+    pub interval: Option<u32>,
+    pub fail_fast: bool,
+    pub watch_timeout: Option<Duration>,
 }
 
 /// Pull request operations, kept separate from `WorkItemProvider` so each seam stays narrow.
@@ -176,10 +199,12 @@ pub trait PullRequestProvider {
     fn create(&self, pr: &NewPr) -> Result<PullRequest, AppError>;
     fn list(&self, query: &PrQuery) -> Result<Vec<PullRequestSummary>, AppError>;
     fn show(&self, number: u64) -> Result<PullRequest, AppError>;
+    /// Reads concise review/mergeability metadata and all required check evidence.
+    fn status(&self, number: u64) -> Result<PullRequestStatus, AppError>;
     /// Fetches the pull request once, then applies the requested change.
     fn edit(&self, number: u64, patch: &PrPatch) -> Result<PullRequest, AppError>;
     fn diff(&self, number: u64, name_only: bool) -> Result<String, AppError>;
-    fn checks(&self, number: u64, required: bool) -> Result<Vec<CheckRun>, AppError>;
+    fn checks(&self, number: u64, options: &PrChecksOptions) -> Result<Vec<CheckRun>, AppError>;
     fn review(&self, number: u64, event: ReviewEvent, body: Option<&str>) -> Result<(), AppError>;
     fn merge(
         &self,
@@ -188,6 +213,10 @@ pub trait PullRequestProvider {
         delete_branch: bool,
         auto: bool,
     ) -> Result<(), AppError>;
+    /// Merge the latest base branch into the pull request branch, or rebase when requested.
+    fn update_branch(&self, number: u64, rebase: bool) -> Result<(), AppError>;
+    /// Checks out the pull request branch in the current local worktree.
+    fn checkout(&self, number: u64) -> Result<(), AppError>;
     /// Marks the pull request ready for review, or back to draft when `draft` is set.
     fn set_ready(&self, number: u64, draft: bool) -> Result<(), AppError>;
     fn close(
@@ -197,6 +226,16 @@ pub trait PullRequestProvider {
         delete_branch: bool,
     ) -> Result<(), AppError>;
     fn reopen(&self, number: u64, comment: Option<&str>) -> Result<(), AppError>;
+    fn comment(&self, number: u64, body: &str) -> Result<(), AppError>;
+    fn lock(&self, number: u64, reason: Option<&str>) -> Result<(), AppError>;
+    fn unlock(&self, number: u64) -> Result<(), AppError>;
+    fn revert(
+        &self,
+        number: u64,
+        title: Option<&str>,
+        body: Option<&str>,
+        draft: bool,
+    ) -> Result<u64, AppError>;
 }
 
 /// Applies a requested body change to the body currently stored by the provider.

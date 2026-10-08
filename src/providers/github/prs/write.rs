@@ -1,6 +1,6 @@
-use crate::domain::{AppError, PullRequest, body};
-use crate::providers::github::prs::{GitHubPulls, read};
-use crate::providers::{MergeMethod, NewPr, PrPatch, ReviewEvent, resolve_body_change};
+use crate::domain::{body, AppError, PullRequest};
+use crate::providers::github::prs::{read, GitHubPulls};
+use crate::providers::{resolve_body_change, MergeMethod, NewPr, PrPatch, ReviewEvent};
 
 pub(super) fn create(provider: &GitHubPulls, pr: &NewPr) -> Result<PullRequest, AppError> {
     if !pr.attachments.is_empty() {
@@ -175,6 +175,37 @@ pub(super) fn merge(
     Ok(())
 }
 
+/// Checks out the PR branch without enabling gh's destructive --force option.
+pub(super) fn checkout(provider: &GitHubPulls, number: u64) -> Result<(), AppError> {
+    let args = [
+        "pr".to_owned(),
+        "checkout".to_owned(),
+        number.to_string(),
+        "--repo".to_owned(),
+        provider.repo.clone(),
+    ];
+    provider.run_gh(&args, None)?;
+    Ok(())
+}
+
+pub(super) fn update_branch(
+    provider: &GitHubPulls,
+    number: u64,
+    rebase: bool,
+) -> Result<(), AppError> {
+    let mut args = vec![
+        "pr".to_owned(),
+        "update-branch".to_owned(),
+        number.to_string(),
+        "--repo".to_owned(),
+        provider.repo.clone(),
+    ];
+    if rebase {
+        args.push("--rebase".to_owned());
+    }
+    provider.run_gh(&args, None)?;
+    Ok(())
+}
 pub(super) fn set_ready(provider: &GitHubPulls, number: u64, draft: bool) -> Result<(), AppError> {
     let mut args = vec![
         "pr".to_owned(),
@@ -232,6 +263,86 @@ pub(super) fn reopen(
     }
     provider.run_gh(&args, None)?;
     Ok(())
+}
+
+pub(super) fn comment(
+    provider: &GitHubPulls,
+    number: u64,
+    body: &str,
+) -> Result<(), AppError> {
+    let args = vec![
+        "pr".to_owned(),
+        "comment".to_owned(),
+        number.to_string(),
+        "--repo".to_owned(),
+        provider.repo.clone(),
+        "--body-file".to_owned(),
+        "-".to_owned(),
+    ];
+    provider.run_gh(&args, Some(body.as_bytes().to_vec()))?;
+    Ok(())
+}
+
+pub(super) fn lock(
+    provider: &GitHubPulls,
+    number: u64,
+    reason: Option<&str>,
+) -> Result<(), AppError> {
+    let mut args = vec![
+        "pr".to_owned(),
+        "lock".to_owned(),
+        number.to_string(),
+        "--repo".to_owned(),
+        provider.repo.clone(),
+    ];
+    if let Some(reason) = reason {
+        args.extend(["--reason".to_owned(), reason.to_owned()]);
+    }
+    provider.run_gh(&args, None)?;
+    Ok(())
+}
+
+pub(super) fn unlock(provider: &GitHubPulls, number: u64) -> Result<(), AppError> {
+    let args = vec![
+        "pr".to_owned(),
+        "unlock".to_owned(),
+        number.to_string(),
+        "--repo".to_owned(),
+        provider.repo.clone(),
+    ];
+    provider.run_gh(&args, None)?;
+    Ok(())
+}
+
+/// Creates a revert pull request for a merged pull request.
+///
+/// The body travels on stdin, never in argv. The number printed by `gh pr revert` identifies the
+/// new pull request; an unreadable result is reported as an invalid provider response.
+pub(super) fn revert(
+    provider: &GitHubPulls,
+    number: u64,
+    title: Option<&str>,
+    body: Option<&str>,
+    draft: bool,
+) -> Result<u64, AppError> {
+    let mut args = vec![
+        "pr".to_owned(),
+        "revert".to_owned(),
+        number.to_string(),
+        "--repo".to_owned(),
+        provider.repo.clone(),
+    ];
+    if let Some(title) = title {
+        args.extend(["--title".to_owned(), title.to_owned()]);
+    }
+    if draft {
+        args.push("--draft".to_owned());
+    }
+    let input = body.map(|body| {
+        args.extend(["--body-file".to_owned(), "-".to_owned()]);
+        body.as_bytes().to_vec()
+    });
+    parse_pr_number(&provider.run_gh(&args, input)?)
 }
 
 fn push_repeated(args: &mut Vec<String>, flag: &str, values: &[String]) {

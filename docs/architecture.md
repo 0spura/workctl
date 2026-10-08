@@ -13,6 +13,13 @@
 > Command-verb decision: [ADR-0016](./adr/0016-gh-verb-parity.md), superseding the issue and pull request verb names in ADR-0004 and ADR-0006.
 > Grammar-selection decision: [ADR-0017](./adr/0017-provider-selected-cli-grammar.md), superseding ADR-0016's single-surface premise and `--provider` as a grammar selector.
 > GitHub Project fields and issue defaults: [ADR-0018](./adr/0018-github-project-dynamic-fields.md), with automatic field selection added by [ADR-0019](./adr/0019-decision-model-project-field-selection.md).
+> GitHub issue relationship reads: [ADR-0023](./adr/0023-github-issue-view-relationships.md).
+> Read-only PR status evidence: [ADR-0028](./adr/0028-read-only-pr-status-evidence.md).
+> GitHub PR merge defaults: [ADR-0029](./adr/0029-github-pr-merge-defaults.md).
+> PR branch update: [ADR-0030](./adr/0030-pr-update-branch.md).
+> Bounded PR-check watch: [ADR-0031](./adr/0031-pr-check-watch.md).
+> Local PR checkout: [ADR-0032](./adr/0032-github-pr-checkout.md).
+> Issue and PR conversation lifecycle: [ADR-0033](./adr/0033-issue-and-pr-conversation-commands.md).
 
 `workctl` is a local Rust CLI. It manages GitHub issues and pull requests, and GitLab issues, by invoking the provider's own command-line tool. Each provider owns a static grammar that is selected before the arguments are parsed; no MCP server ships.
 
@@ -28,20 +35,90 @@ src/
     common.rs                 shared body-change flags, number and limit parsing, and nonblank value parser
     github/
       mod.rs                  the GitHub grammar enum
-      issues.rs               GitHub issue subcommand argument types
-      prs.rs                  GitHub pull request subcommand argument types
+      issues/
+        mod.rs                issue command grammar and dispatch
+        create.rs              create arguments
+        list.rs                list arguments
+        blockers.rs            compact open-blocker chain arguments
+        view.rs                issue body/type and hierarchy arguments
+        edit.rs                issue edit arguments
+        close.rs               close arguments
+        reopen.rs              reopen arguments
+        comment.rs             comment-body arguments
+        lock.rs                lock-reason arguments
+        unlock.rs              unlock arguments
+      prs/
+        mod.rs                pull-request grammar and dispatch
+        create.rs              create arguments
+        checkout.rs            checkout arguments
+        list.rs                list arguments
+        view.rs                view arguments
+        status.rs              concise review/mergeability/check-status arguments
+        diff.rs                diff arguments
+        checks.rs              checks arguments
+        review.rs              review arguments
+        merge.rs               merge arguments
+        edit.rs                edit arguments
+        ready.rs               ready/draft arguments
+        close.rs               close arguments
+        reopen.rs              reopen arguments
+        comment.rs             comment-body arguments
+        lock.rs                lock-reason arguments
+        unlock.rs              unlock arguments
+        revert.rs              revert-creation arguments
+        update_branch.rs       update PR branch arguments
     gitlab/
       mod.rs                  the GitLab grammar enum
-      issues.rs               GitLab issue subcommand argument types
+      issues/
+        mod.rs                issue command grammar and dispatch
+        create.rs              create arguments
+        list.rs                list arguments
+        view.rs                view arguments
+        update.rs              update arguments
   commands/
     mod.rs                    dispatch by grammar provider
     github/
       mod.rs
-      issues.rs               GitHub issue use cases: resolve context, call the provider, select output
-      prs.rs                  GitHub pull request use cases
+      issues/
+        mod.rs                GitHub issue use-case dispatch
+        create.rs              create use case
+        list.rs                list use case
+        blockers.rs            bounded blocker-chain traversal use case
+        view.rs                issue body/type and hierarchy use case
+        edit.rs                edit use case
+        close.rs               close use case
+        reopen.rs              reopen use case
+        comment.rs             single-comment use case
+        lock.rs                lock use case
+        unlock.rs              unlock use case
+      prs/
+        mod.rs                pull-request use-case dispatch
+        create.rs              create use case
+        checkout.rs            current-worktree checkout use case
+        list.rs                list use case
+        view.rs                view use case
+        status.rs              bounded status-evidence aggregation use case
+        diff.rs                diff use case
+        checks.rs              checks use case
+        review.rs              review use case
+        merge.rs               merge use case
+        edit.rs                edit use case
+        ready.rs               ready/draft use case
+        close.rs               close use case
+        reopen.rs              reopen use case
+        comment.rs             single-comment use case
+        lock.rs                lock use case
+        unlock.rs              unlock use case
+        revert.rs              revert-creation use case
+        update_branch.rs       remote branch-update use case
     gitlab/
       mod.rs
-      issues.rs               GitLab issue reads
+      issues/
+        mod.rs                GitLab issue use-case dispatch
+        create.rs              create use case
+        list.rs                list use case
+        view.rs                view use case
+        update.rs              update use case
     support.rs                shared context resolution, text reading, and body-change setup
   config/
     mod.rs
@@ -53,7 +130,7 @@ src/
     body.rs                   append and section-replacement policy
     error.rs                  stable, safe user-facing errors
     issue.rs                  Issue and IssueSummary contracts
-    pr.rs                     PullRequest, PullRequestSummary, PullRequestState, and CheckRun contracts
+    pr.rs                     pull-request, status, summary, and check-run contracts
     label.rs                  candidate repository labels and normalized model scores
   decision_model/
     mod.rs                    provider-neutral DecisionModel contract and adapter selection
@@ -72,13 +149,14 @@ src/
       projects.rs             GitHub Project schema discovery, validation, membership, and field writes
       issues/
         mod.rs                GitHub issue provider composition
-        read.rs               list/show
-        write.rs              create/edit
+        read.rs               list/basic show
+        relationships.rs      relationship-aware view and bounded open-blocker chains
+        write.rs              create/edit/close/reopen/comment/lock/unlock
         mapping.rs            response validation and state normalization
       prs/
         mod.rs                GitHub pull request provider composition
-        read.rs               list/show/diff/checks
-        write.rs              create/edit/review/merge/ready/close/reopen
+        read.rs               list/show/status/diff/checks
+        write.rs              create/edit/review/merge/branch-update/ready/close/reopen/comment/lock/unlock/revert
         mapping.rs            pull request and check-run validation and state normalization
     gitlab/
       mod.rs                  shared `glab` execution, authentication, and the pinned project URL
@@ -112,7 +190,7 @@ GitLab has its own grammar and adapter rather than extending the GitHub one. Git
 6. Issue creation invokes the provider-neutral `DecisionModel` when `@auto` is present, or when the applicable GitHub Project profile has an unclaimed field in `autoSelectFields`. It sends the proposed title/body and allowlisted candidate names/descriptions in one request; repository labels and eligible Project options share the request. The model boundary receives no provider credentials or unrelated metadata. Model configuration and response validation happen before issue creation. Issue edits retain the timestamp guard.
 7. The GitHub adapter invokes `gh issue list` and `gh pr list` for bounded summaries, passing filters through as fixed flags. Issue reads use `gh api`; issue create/edit use `gh issue create|edit`; pull requests use `gh pr` commands. On issue/PR create/edit and `pr edit`, shared GitHub code resolves an explicit `--milestone @current` selector by querying open milestones and choosing the nearest due date today or later; a tie or no eligible milestone fails before the write instead of guessing. An omitted selector makes no request and leaves the field unset, other values pass through verbatim, list filters stay literal, and omission on an edit or update preserves the remote value. Typed optional metadata flags are forwarded directly to `gh`. Create/edit bodies are passed over stdin rather than interpolated into a shell command.
    GitHub issue creation merges configured defaults only for the exact allowlisted repository. With a configured Project profile, it queries Project fields through `gh api graphql`, validates every field/value, and resolves allowlisted auto-select options before creating the issue. Explicit/configured values take precedence; only single-select and iteration fields can be automatically selected. It then adds the issue and applies typed field edits serially. Explicit `--project` is accepted only when the single discovered Project title matches the profile. A failed post-create operation returns a generic partial-success error with the created issue and completed/pending actions; it never retries automatically.
-   GitHub issue editing plans only explicitly set/cleared fields against the in-scope Project schema. It fetches the issue for body resolution and the timestamp guard before mutations, skips an issue write for field-only edits, and writes requested fields serially without adding membership automatically. A failure after a completed issue or field write reports generic `partial_success`. Creation defaults and automatic Project selection are never applied during edit; Project fields are outside the issue revision.
+   GitHub issue editing plans only explicitly set/cleared fields against the in-scope Project schema. An explicit `NAME=@auto` resolves discovered single-select/iteration options and shares one model request per issue with automatic labels using final proposed text. A unique best score >= 0.8 plans a field write; low confidence and tied best options preserve the current field. Choices reset between batch targets. The issue revision is rechecked after classification, field-only edits skip the issue mutation, and requested fields are written serially without automatically adding membership. A failure after a completed write reports `partial_success`. Creation defaults and configured `autoSelectFields` are never reapplied during edit; Project field revisions are outside the issue guard.
    Native issue type and parent/sub-issue/blocking changes are provider-owned `NativeIssueEdit` metadata; they share one `gh issue edit` with the generic patch without widening the provider-neutral request. The obsolete generic issue-edit trait method is removed. The GitHub command validates canonical issue references and same-repository targets before provider access, then processes distinct targets serially. It reuses one Project schema plan and one label catalog per invocation; each target retains its own body resolution/model request and timestamp guard. Work scales with the explicit target count and, for Project edits, target count times requested field count; no relationship crawl or unbounded pagination is introduced. A later target failure returns batch `partial_success`; a failed readback after a completed native mutation reports that mutation separately.
 8. The GitLab adapter invokes `glab issue list`, `view`, `create`, and `update` with the project as a full `https://gitlab.com/...` URL. Reads and post-write confirmation use `--output json`; create validates the emitted issue URL and obtains the shared result with `issue view`. Native GitLab write fields remain typed on the GitLab adapter. Description content travels on stdin; empty update descriptions and dash-only descriptions are rejected before provider access. Since `glab issue create` omits `--weight=0`, an explicit zero is applied with a follow-up `glab issue update --weight=0`. The mapping turns `iid` into `number`, `description` into `body`, and `opened` into `open`, and rejects malformed responses instead of emitting partial records.
 9. Typed results are serialized by `output`; errors are mapped once to a safe JSON error on stderr and nonzero exit.
@@ -141,7 +219,8 @@ before implementation; no storage engine or new CLI flag is implied here.
 
 - Discover both config files at the Git worktree root on every command invocation, including when `--provider`/`--repo` override their values; never walk above the root.
 - Both files are strict JSON, regular non-symlink files capped at 64 KiB. Local `provider`, `workItemProvider`, and `defaults` replace their shared top-level counterparts; `defaults` is replaced as a whole, not deep-merged. Unknown keys and malformed files fail closed.
-- `defaults.github.issue` keeps repository-specific assignees/labels and optional Project profile data (`url`, exact `repositories`, string-valued `fields`). `labelCandidates` narrows the labels passed to DecisionModel. The application resolves this configuration at issue creation and applies Project behavior only to allowlisted repository paths.
+- `defaults.github.issue` retains repository-specific issue settings and optional Project profile (`url`, exact `repositories`, string-valued `fields`). `labelCandidates` narrows labels passed to DecisionModel. `defaults.github.pr.mergeMethod` selects `merge|squash|rebase` when `pr merge --method` is omitted; explicit CLI method wins, and absence of both leaves method selection to `gh`.
+- `defaults.github.pr.deleteBranch` is a boolean defaulting to false. True enables branch deletion for all PR merges; `--delete-branch` can enable it for one invocation, but there is no inverse CLI option. Local defaults replace shared defaults as a whole.
 - Provider precedence: CLI `--provider`, local/shared `workItemProvider`, local/shared `provider`, then Git remote host. Grammar selection reads the same sources before parsing, best-effort and without a command tree; the authoritative resolution reports the real error.
 - Repository precedence: CLI `--repo [HOST/]OWNER[/...]/REPO`, then the Git `origin` remote.
 - The repository is validated before inclusion in any provider argument or endpoint path: GitHub accepts exactly `OWNER/REPO`, GitLab accepts `GROUP[/SUBGROUP...]/PROJECT`, and a leading host must belong to the resolved provider. HTTPS and SCP-style SSH GitHub and GitLab remotes are recognized; unknown hosts do not fall back, and an origin remote belonging to another provider than the selected one fails closed.
@@ -152,7 +231,18 @@ before implementation; no storage engine or new CLI flag is implied here.
 
 `WorkItemProvider` owns shared GitHub issue create, list, and show operations. Editing is provider-owned: `GitHubIssues::edit_native` combines the generic body/metadata patch with GitHub type/relationship fields and an optional Project plan. The application/CLI layer receives normalized `Issue` or `IssueSummary`; provider response casing stays inside adapters. `Issue.state` is `open|closed`; an issue summary excludes the body. GitLab writes likewise use provider-owned native request types, rather than forcing distinct update semantics into the shared issue seam.
 
-`PullRequestProvider` is a second, narrow seam rather than an extension of `WorkItemProvider`. The two domains differ in nearly every operation — issues use `gh issue create|edit`, while pull requests add diff, checks, review, merge, ready, close, and reopen and normalize state to `open|closed|merged` — so widening the issue seam would force every provider and caller to carry capabilities neither needs. Each seam owns its request types: `NewPr`, `PrQuery`, `PrPatch`, plus `ReviewEvent` and `MergeMethod`. `PrPatch::is_empty` rejects a mutationless update; its guard timestamp alone is not a write. The GitHub composition mirrors the issue adapter, splitting reads, writes, and validation.
+GitHub's public `issue view` uses provider-owned `GitHubIssues::view` and `GitHubIssueView`, flattening the basic issue record and adding its type and direct parent/sub-issue relations. It does not query or print blocked-by/blocking connections. `read::show` remains the basic REST read used by mutations and their guards; its pull-request rejection also runs before hierarchy lookup. Reads use `gh api graphql` with owner/name/number/cursor variables and fixed connection names. Sub-issues are paginated at 100 per page, with ten pages and 1,000 nodes, bounding one view to 11 API calls including REST and excluding authentication. The separate `issue blockers` command traverses native `blockedBy` edges under its existing bounded, fail-closed contract; native relationship writes remain unchanged.
+
+
+`PullRequestProvider` is a second, narrow seam rather than an extension of `WorkItemProvider`. The two domains differ in nearly every operation — issues use `gh issue create|edit`, while pull requests add diff, checks, review, merge, ready, close, and reopen and normalize state to `open|closed|merged` — so widening the issue seam would force every provider and caller to carry capabilities neither needs. Each seam owns its request types: `NewPr`, `PrQuery`, `PrPatch`, plus `ReviewEvent` and `MergeMethod`. `PrPatch::is_empty` rejects a mutationless update; its guard timestamp alone is not a write. The GitHub composition mirrors the issue adapter, splitting reads, writes, and validation. PR merge resolves the method as explicit CLI value, configured `defaults.github.pr.mergeMethod`, then `gh` inference; configured `deleteBranch` defaults false and combines with `--delete-branch` by logical OR.
+
+GitHub `pr status` is a read-only provider operation that makes exactly one `gh pr view` call for review/mergeability fields (no body), then one `gh pr checks --required` call. Existing subprocess timeout/output bounds apply; there is no pagination. Both calls use one authenticated provider context and execute sequentially; failure yields no combined success result, and the result is not an atomic snapshot. `PullRequestStatus` exposes those observed values and check runs without deriving a ready-to-merge verdict: an empty check report or unknown review/mergeability value is inconclusive.
+`pr checks --watch` delegates waiting to native `gh pr checks --watch`, optionally forwarding `--interval` and `--fail-fast`; it does not poll in workctl or involve DecisionModel/JEV. The normal subprocess deadline remains 30 seconds. Watch mode uses an absolute deadline of 600 seconds by default, configurable from 1 to 3600 seconds, while retaining the runner's output caps and child-kill behavior. The adapter parses valid check JSON even when `gh` exits nonzero, preserving failing/pending evidence and the existing no-checks empty result; deadline expiry maps to safe `timeout` with no partial success output.
+
+`pr update-branch` is a remote write owned by `PullRequestProvider`: after the shared provider setup authenticates, the GitHub adapter makes one `gh pr update-branch NUMBER --repo OWNER/REPO` call, adding `--rebase` only when requested. The default strategy merges the latest base into the PR branch; `--rebase` changes the strategy. It does not fetch a separate snapshot, check out a branch, or touch the local worktree. A provider failure returns no success output and is mapped through the existing safe `github_cli` error path.
+`pr checkout` is a local worktree-changing operation behind `PullRequestProvider`: after provider setup resolves the repository and authenticates, the GitHub adapter invokes `gh pr checkout NUMBER --repo OWNER/REPO` with inherited current working directory. Workctl never supplies `--force`, branch-name, detached-HEAD, or alternate-worktree flags; GitHub CLI handles PR branch discovery and normal checkout conflicts. Success reports the PR number; provider failure is mapped to safe `github_cli` with no success output.
+
+Issue and pull-request conversation commands are thin native-flag forwards behind the existing seams. `WorkItemProvider` owns `close`, `reopen`, `comment`, `lock`, and `unlock`; `PullRequestProvider` owns its own `comment`, `lock`, and `unlock` plus `revert`. Each command builds one `gh issue`/`gh pr` argument array containing only the repository context and the explicitly supplied options, so no default reason, comment, title, or body is inferred. Comment and revert bodies are written to the child's stdin through `--body-file -` rather than argv, keeping body text out of the process argument list. Mutually exclusive or required option sets (comment body source, `--reason` values) are rejected by clap before provider access. Every operation returns a compact identifier record — issue state, comment target, lock state, or the reverted/new pull-request numbers — and a provider failure maps to the existing safe `github_cli` error with no success output. `pr revert` creates remote state and is never retried automatically; an unreadable revert result is reported as `provider_response`.
 
 Requests cross the issue and pull-request seams as typed values, not loose strings. The `DecisionModel` package is provider-neutral: it receives work-item title/description and generic named candidates with optional descriptions, and returns validated `{candidate, probability}` scores (serialized as `label` for existing adapter wire compatibility). Its adapters are Jev, Laya, GLiDE, and generic local LLM; each keeps its own native HTTP contract behind the same interface. GitHub issue create/edit currently call it for repository-label selection; issue create also passes configured, dynamically discovered single-select/iteration Project options. The model package itself does not depend on GitHub response types.
 
@@ -176,11 +266,11 @@ Text output escapes terminal control characters in provider strings (titles, aut
 ## Process and security boundary
 
 - One process runner owns all `git`, `gh`, and `glab` process creation. It accepts an executable and argument vector; it never invokes a shell.
-- Create/edit bodies are passed on stdin as text to `gh`; GitLab create/update descriptions are passed on stdin to `glab`, never in argv. GitHub API reads and `glab issue` reads use no request body. Each output stream has an 8 MiB cap; one absolute 30-second deadline covers child completion and pipe/input workers, and a still-running direct child is killed on expiry.
+- Create/edit bodies are passed on stdin as text to `gh`; GitLab create/update descriptions are passed on stdin to `glab`, never in argv. GitHub API reads and `glab issue` reads use no request body. Each output stream has an 8 MiB cap; one absolute 30-second deadline covers ordinary child completion and pipe/input workers. PR-check watch opts into an absolute 600-second deadline (configurable up to 3600 seconds); a still-running direct child is killed on expiry.
 
 - `gh` owns GitHub credentials and `glab` owns GitLab credentials. `workctl` checks `gh auth status` or `glab auth status` and discards the output.
-- Hosted model credentials use `DECISION_MODEL_API_KEY` only after `@auto` explicitly selects a hosted adapter; they are sent only to that adapter's fixed HTTPS endpoint. Local service URLs are rejected unless loopback.
-- Model requests contain only the proposed work-item title/description and candidate labels; credentials, comments, URLs, and unrelated code-host metadata are excluded.
+- Hosted model credentials use `DECISION_MODEL_API_KEY` only for an opted-in automatic selection; they are sent only to the selected adapter's fixed HTTPS endpoint. Local service URLs are rejected unless loopback.
+- Model requests contain only work-item title/description and named candidate context. Credentials, comments, and unrelated code-host metadata are excluded. Candidate text remains untrusted data; model output is restricted to offered names and never authorizes a write.
 - Raw provider diagnostics, config contents, credentials, stack traces, and internal paths are not included in user-facing errors.
 - Invalid model configuration and provider payloads fail closed; no fallback fabricates records or silently drops requested scores.
 
@@ -209,6 +299,8 @@ Text output escapes terminal control characters in provider strings (titles, aut
 | A number given to a pull request command is not a pull request | `not_pull_request` JSON error; no write | Use a pull request number, or the `issue` group for issues |
 | An issue command is given a pull request number | `not_issue` JSON error; no write | Use the issue number, or the `pr` group for pull requests |
 | GitHub command failure | Generic `github_cli` JSON error; raw stderr withheld | Check `gh` authentication/permissions and retry |
+| Conversation command with a missing/blank comment body, an unsupported `--reason`, or both body sources | `invalid_input` or clap usage error; no `gh` call | Supply one body source and a reason `gh` accepts |
+| `pr revert` succeeds but prints no readable pull-request URL | `provider_response` JSON error; the revert may exist | Check GitHub for the revert pull request before retrying |
 | Project membership/field update fails after issue creation | Generic `partial_success` with the created resource and completed/pending operations; no automatic retry | Inspect the resource and resume only the pending operations |
 | GitLab command failure | Generic `gitlab_cli` JSON error; raw stderr withheld | Check `glab` authentication/permissions and retry |
 | GitLab issue write fails, times out, or cannot be confirmed by a read-back | `gitlab_write_uncertain`; the issue may exist or have changed | Check GitLab before retrying |

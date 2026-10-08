@@ -4,8 +4,7 @@ mod issue;
 mod label;
 pub mod patch;
 mod pr;
-
 pub use error::AppError;
-pub use issue::{Issue, IssueState, IssueSummary};
+pub use issue::{GitHubIssueView, Issue, IssueState, IssueSummary, RelatedIssue};
 pub use label::{DecisionCandidate, DecisionScore, RepositoryLabel};
-pub use pr::{CheckRun, PullRequest, PullRequestState, PullRequestSummary};
+pub use pr::{CheckRun, PullRequest, PullRequestState, PullRequestStatus, PullRequestSummary};

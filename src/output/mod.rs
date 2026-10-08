@@ -4,15 +4,21 @@ use crate::cli::OutputFormat;
 
 use serde::Serialize;
 
-use crate::domain::{AppError, CheckRun, Issue, IssueSummary, PullRequest, PullRequestSummary};
+use crate::domain::{
+    AppError, CheckRun, GitHubIssueView, Issue, IssueSummary, PullRequest, PullRequestStatus,
+    PullRequestSummary,
+};
 
 #[derive(Serialize)]
 #[serde(untagged)]
 pub enum SuccessOutput {
     Issue(Issue),
+    GitHubIssueView(GitHubIssueView),
+    BlockerChains(Vec<String>),
     IssueEdits(Vec<Issue>),
     Issues(Vec<IssueSummary>),
     PullRequest(PullRequest),
+    PullRequestStatus(PullRequestStatus),
     PullRequests(Vec<PullRequestSummary>),
     Checks(Vec<CheckRun>),
     Diff {
@@ -35,6 +41,30 @@ pub enum SuccessOutput {
     State {
         number: u64,
         state: String,
+    },
+    IssueState {
+        number: u64,
+        state: String,
+    },
+    Comment {
+        number: u64,
+        target: String,
+    },
+    ConversationLock {
+        number: u64,
+        target: String,
+        locked: bool,
+    },
+    Revert {
+        number: u64,
+        pull_request: u64,
+    },
+    UpdateBranch {
+        number: u64,
+        rebase: bool,
+    },
+    Checkout {
+        number: u64,
     },
 }
 

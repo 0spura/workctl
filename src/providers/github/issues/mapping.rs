@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::domain::{AppError, Issue, IssueState, IssueSummary};
+use crate::domain::{AppError, Issue, IssueState, IssueSummary, RelatedIssue};
 
 #[derive(Deserialize)]
 struct ApiIssue {
@@ -87,6 +87,148 @@ fn parse_state(value: &str) -> Result<IssueState, AppError> {
     } else {
         Err(AppError::provider_response())
     }
+}
+
+#[derive(Deserialize)]
+struct ApiRelatedIssue {
+    number: u64,
+    title: String,
+    state: String,
+    url: String,
+}
+
+impl ApiRelatedIssue {
+    fn normalize(self) -> Result<RelatedIssue, AppError> {
+        if self.number == 0 || self.title.trim().is_empty() || self.url.is_empty() {
+            return Err(AppError::provider_response());
+        }
+        Ok(RelatedIssue {
+            number: self.number,
+            title: self.title,
+            state: parse_state(&self.state)?,
+            url: self.url,
+        })
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApiConnection {
+    nodes: Vec<ApiRelatedIssue>,
+    total_count: usize,
+    page_info: PageInfo,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PageInfo {
+    has_next_page: bool,
+    end_cursor: Option<String>,
+}
+
+pub(super) struct RelationPage {
+    pub nodes: Vec<RelatedIssue>,
+    pub total_count: usize,
+    pub next_cursor: Option<String>,
+}
+
+impl ApiConnection {
+    fn normalize(self) -> Result<RelationPage, AppError> {
+        if self.nodes.len() > 100
+            || (self.page_info.has_next_page
+                && (self.nodes.is_empty()
+                    || self
+                        .page_info
+                        .end_cursor
+                        .as_ref()
+                        .is_none_or(|cursor| cursor.is_empty())))
+        {
+            return Err(AppError::provider_response());
+        }
+        Ok(RelationPage {
+            nodes: self
+                .nodes
+                .into_iter()
+                .map(ApiRelatedIssue::normalize)
+                .collect::<Result<_, _>>()?,
+            total_count: self.total_count,
+            next_cursor: self
+                .page_info
+                .has_next_page
+                .then_some(self.page_info.end_cursor)
+                .flatten(),
+        })
+    }
+}
+
+#[derive(Deserialize)]
+struct ApiIssueType {
+    name: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApiRelationships {
+    #[serde(deserialize_with = "Option::deserialize")]
+    issue_type: Option<ApiIssueType>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    parent: Option<ApiRelatedIssue>,
+    sub_issues: ApiConnection,
+}
+
+pub(super) struct Relationships {
+    pub issue_type: Option<String>,
+    pub parent: Option<RelatedIssue>,
+    pub sub_issues: RelationPage,
+}
+
+pub(super) fn relationships(bytes: &[u8]) -> Result<Relationships, AppError> {
+    let response: ApiRelationships =
+        serde_json::from_value(graphql_issue(bytes)?).map_err(|_| AppError::provider_response())?;
+    let issue_type = response.issue_type.map(|issue_type| issue_type.name);
+    if issue_type
+        .as_ref()
+        .is_some_and(|name| name.trim().is_empty())
+    {
+        return Err(AppError::provider_response());
+    }
+    Ok(Relationships {
+        issue_type,
+        parent: response
+            .parent
+            .map(ApiRelatedIssue::normalize)
+            .transpose()?,
+        sub_issues: response.sub_issues.normalize()?,
+    })
+}
+
+pub(super) fn relation_page(bytes: &[u8]) -> Result<RelationPage, AppError> {
+    let mut issue = graphql_issue(bytes)?;
+    let connection: ApiConnection = serde_json::from_value(
+        issue
+            .as_object_mut()
+            .and_then(|issue| issue.remove("relations"))
+            .ok_or_else(AppError::provider_response)?,
+    )
+    .map_err(|_| AppError::provider_response())?;
+    connection.normalize()
+}
+
+fn graphql_issue(bytes: &[u8]) -> Result<Value, AppError> {
+    let mut response: Value =
+        serde_json::from_slice(bytes).map_err(|_| AppError::provider_response())?;
+    if response.get("errors").is_some_and(|errors| {
+        !errors.is_null() && errors.as_array().is_none_or(|errors| !errors.is_empty())
+    }) {
+        return Err(AppError::provider_response());
+    }
+    response
+        .get_mut("data")
+        .and_then(|data| data.get_mut("repository"))
+        .and_then(|repository| repository.get_mut("issue"))
+        .filter(|issue| issue.is_object())
+        .map(Value::take)
+        .ok_or_else(AppError::provider_response)
 }
 
 #[cfg(test)]

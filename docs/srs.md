@@ -10,16 +10,16 @@ Actors: a developer or coding agent running `workctl` locally. Observable behavi
 ### RF-CLI.1: Command surface
 **Priority:** Must Have | **Status:** Implemented | **Dependencies:** none
 
-- Command groups in the GitHub grammar: `workctl issue create|list|view|edit` and `workctl pr create|list|view|diff|checks|review|merge|edit|ready|close|reopen`.
+- GitHub issue commands are `create|list|blockers|view|edit|close|reopen|comment|lock|unlock`; GitHub pull-request commands are `create|checkout|list|view|status|diff|checks|review|merge|edit|ready|close|reopen|comment|lock|unlock|revert|update-branch`.
 - The provider is resolved before the command grammar is parsed: `.workctl.json`/`.workctl.local.json` (`provider`, `workItemProvider`), then the Git origin host, with explicit `--provider` overriding both.
-- Each provider owns a static grammar. The active grammar's verbs and flags mirror that provider's own CLI, and another provider's verb or flag is a usage error rather than a runtime rejection.
+- Each provider owns a static grammar. Native operations mirror that provider's CLI, with GitHub-only read diagnostics `blockers`; another provider's verb or flag is a usage error rather than a runtime rejection.
 - Top-level `--help` is provider-neutral and states the resolution order; a subcommand's help reflects the resolved provider's grammar.
 - `--repo OWNER/REPO`, `--provider`, and `--format json|text` are global overrides accepted before or after the group.
 - Help and version work without `git` or `gh` installed.
-- Every flag carries a help description, and each subcommand prints usage examples for the behavior a caller cannot infer from flag names — for `issue edit` and `pr edit`, the body-change set and the exact-match patch contract; for `pr list`, filter composition; for `pr merge`, when an explicit method is required.
+- Every flag carries a help description, and each subcommand prints usage examples for behavior a caller cannot infer from flag names — for `issue edit` and `pr edit`, the body-change set and exact-match patch contract; for `pr list`, filter composition; for `pr merge`, when an explicit method is required; for `pr status`, the review/mergeability/required-check evidence it reports; for `pr update-branch`, default merge-commit versus explicit rebase behavior; for `pr checks --watch`, bounded waiting; and for `pr checkout`, its current-worktree effect and absence of forced checkout.
 - There is no delete command for issues or pull requests in v0.
 
-**Acceptance:** In the GitHub grammar, `workctl issue --help` lists exactly four supported issue subcommands and `workctl pr --help` lists exactly eleven supported pull request subcommands; invoking an unknown command produces a structured JSON error on stderr and a nonzero exit. A verb or flag belonging to another provider's grammar is rejected as a usage error. No flag in any subcommand help is printed without a description, and `workctl issue edit --help` documents the `patch_conflict` failure and exact-context matching.
+**Acceptance:** In the GitHub grammar, `workctl issue --help` lists exactly ten supported issue subcommands and `workctl pr --help` lists exactly eighteen supported pull request subcommands; invoking an unknown command produces a structured JSON error on stderr and a nonzero exit. A verb or flag belonging to another provider's grammar is rejected as a usage error. No flag in any subcommand help is printed without a description, and `workctl issue edit --help` documents the `patch_conflict` failure and exact-context matching.
 **Verification:** CLI integration test.
 
 ### RF-WI.1: Create an issue
@@ -56,9 +56,12 @@ Actors: a developer or coding agent running `workctl` locally. Observable behavi
 
 - `view NUMBER` returns the selected issue with its body and normalized `open|closed` state.
 - `NUMBER` must be a positive integer; a pull request number is not accepted as an issue.
+- GitHub `view` adds nullable `issue_type` and `parent`, plus a `sub_issues` array. Related issues carry `number`, `title`, normalized `state`, and a URL that distinguishes cross-repository references. Text output escapes controls in every provider string. Neither JSON nor text includes blocked-by/blocking relationships, and the query does not request those connections; dependency diagnostics belong to `issue blockers`.
+- Read direct hierarchy only, not transitive dependencies. Paginate sub-issues at 100 per page, up to ten pages and 1,000 related issues. GraphQL errors, unavailable/missing data, malformed references, duplicate URLs, changing counts, repeated cursors, and incomplete/oversized connections fail without successful output. Reads across pages are not an atomic graph snapshot.
+- Keep GitHub create/edit/list and GitLab output contracts unchanged. Mutation guards continue to use the basic issue read, without relationship queries.
 
-**Acceptance:** Valid issue details are returned; zero, malformed identifiers, missing issues, and pull requests produce structured errors without leaking provider stderr.
-**Verification:** Integration tests with provider fixtures.
+**Acceptance:** Valid details preserve issue body and hierarchy, cross-repository URLs, observed null/empty hierarchy, and the last page, without blocker fields or dependency queries. Invalid issue identifiers, pull requests, malformed or unavailable hierarchy data, and incomplete pagination produce structured errors without partial stdout or provider diagnostics.
+**Verification:** `tests/cli_issues.rs` includes `view_exposes_native_relationship_direction_and_safe_text`, `view_paginates_each_relationship_connection`, and `view_rejects_incomplete_relationship_graphs_without_leaking_diagnostics`; native edit and GitLab suites preserve unaffected outputs.
 
 ### RF-WI.4: Edit an issue
 **Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.1, RF-PRV.1
@@ -78,6 +81,75 @@ Actors: a developer or coding agent running `workctl` locally. Observable behavi
 
 **Acceptance:** Editing supports independent metadata and attachment-only updates without changing omitted fields; body changes produce the expected provider write after a pre-write fetch; a stale timestamp, non-applying patch, no-field update, blank value, conflicting or incomplete body change fail before the write. Automatic labels use final proposed text, preserve existing labels, reject concurrent changes, and perform no write if no automatic or other label is selected and no other change was requested.
 **Verification:** Integration tests in `tests/cli_issues.rs` cover body changes, metadata, attachments/version gate, partial updates, concurrency, marker validation and automatic labels. Stateful `tests/cli_native_edit.rs` scenarios cover relationship direction and removal, native shortcuts, type changes, URL targets, comma-separated metadata, batch success/partial failure, invalid references/conflicts, stale guards, and post-write readback failure.
+
+### RF-WI.7: Print compact open-blocker chains
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-WI.3, RF-PRV.1
+
+- GitHub `issue blockers NUMBER` returns only complete paths of currently open blocking issues leading to the target. Arrow direction is blocker-to-blocked, e.g. `#18 -> #29 -> #30`. Cross-repository references use `OWNER/REPO#NUMBER`; same-repository references use `#NUMBER`.
+- Closed targets return no chains. Closed blockers stop propagation and are omitted. Parent/sub-issue relations are not traversed. An empty result means no open blocker chain was observed; it does not assert that other criteria for execution are satisfied.
+- Default JSON output is an array of chain strings, with `[]` when empty. Text output prints one chain per line and emits no bytes when empty. No titles, bodies, relation objects, or successful status boilerplate are included.
+- Explore only direct `blockedBy` edges. Bound the complete traversal to 20 issue reads, 500 edges, 20 returned chains, and depth 20, including pagination queries in the read budget. Connections page at 100 and each is limited to 1,000 records. Exceeding a bound returns `relationship_limit` with no partial output; provider/authentication errors and malformed/cyclic responses also fail without successful output.
+- Sort complete chains deterministically. Reads span multiple requests and are not an atomic snapshot; conflicting observed issue states fail with `conflict`.
+
+**Acceptance:** A chain and multiple branches are emitted compactly in blocker-to-target order, including cross-repository identity; closed blockers/targets produce no open chain; no-chain text is empty and JSON is `[]`; failures, cycles, and limits never produce successful partial chains or provider diagnostics.
+**Verification:** `tests/cli_issues.rs` covers chained/branched and cross-repository results, empty JSON/text, closed targets and blockers, bounded traversal, cycles, and provider failure.
+
+### RF-WI.8: Close an issue
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.1, RF-PRV.1
+
+- `issue close NUMBER` closes the issue through `gh issue close NUMBER --repo OWNER/REPO`.
+- `--comment TEXT` leaves a closing comment. `--reason` accepts only `completed`, `not planned`, or `duplicate`; any other value is a usage error before provider access. `--duplicate-of` accepts a positive issue number or a canonical `https://github.com/OWNER/REPO/issues/NUMBER` URL.
+- Only the explicitly supplied options are forwarded as `gh` flags; no reason or duplicate reference is inferred.
+- On success, return `{ "number", "state": "closed" }`.
+- Errors: `github_cli` when the provider call fails, with no success output and no provider diagnostics.
+
+**Acceptance:** `issue close 12 --comment Fixed --reason completed` and `issue close 12 --duplicate-of 9` each forward exactly the supplied native flags and report `state: closed`; an unsupported `--reason` value fails during argument parsing before any provider call; provider failure emits a structured error and no partial stdout.
+**Verification:** `tests/cli_issues.rs` covers flag forwarding, the result state, the invalid-reason rejection, and safe provider failure.
+
+### RF-WI.9: Reopen an issue
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.1, RF-PRV.1
+
+- `issue reopen NUMBER` reopens the issue through `gh issue reopen NUMBER --repo OWNER/REPO`; `--comment TEXT` adds a reopening comment.
+- On success, return `{ "number", "state": "open" }`.
+- Errors: `github_cli` when the provider call fails, with no success output and no provider diagnostics.
+
+**Acceptance:** `issue reopen 12 --comment Reopened` forwards the comment and reports `state: open`; provider failure emits a structured error and no partial stdout.
+**Verification:** `tests/cli_issues.rs` covers flag forwarding, the result state, and safe provider failure.
+
+### RF-WI.10: Comment on an issue
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.1, RF-PRV.1
+
+- `issue comment NUMBER` adds one top-level comment through `gh issue comment NUMBER --repo OWNER/REPO --body-file -`.
+- Comment text comes from exactly one of `--body TEXT` or `--body-file FILE`, where `-` reads standard input. Omitting both, or supplying both, is a usage error before provider access. Blank text is `invalid_input`.
+- The body travels on stdin, never in process arguments, and text read from a file or stdin is capped at 1 MiB.
+- On success, return `{ "number", "target": "issue" }`; text output states that the issue was commented.
+- Errors: `github_cli` when the provider call fails, with no success output and no provider diagnostics. The command reads no existing comment thread.
+
+**Acceptance:** `issue comment 12 --body-file -` sends the supplied text to `gh` on stdin and reports the issue as the target; a missing or blank body fails before provider access; provider failure emits a structured error and no partial stdout.
+**Verification:** `tests/cli_issues.rs` covers stdin delivery, the result shape, missing-body rejection, and safe provider failure.
+
+### RF-WI.11: Lock an issue conversation
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.1, RF-PRV.1
+
+- `issue lock NUMBER` locks the conversation through `gh issue lock NUMBER --repo OWNER/REPO`.
+- `--reason` accepts only `off_topic`, `resolved`, `spam`, or `too_heated`; any other value is a usage error before provider access. An omitted reason forwards no `--reason`.
+- On success, return `{ "number", "target": "issue", "locked": true }`.
+- Errors: `github_cli` when the provider call fails, with no success output and no provider diagnostics.
+
+**Acceptance:** `issue lock 12 --reason resolved` forwards the reason and reports `locked: true`; an unsupported reason fails during argument parsing before any provider call.
+**Verification:** `tests/cli_issues.rs` covers reason forwarding, the lock result, the invalid-reason rejection, and safe provider failure.
+
+### RF-WI.12: Unlock an issue conversation
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.1, RF-PRV.1
+
+- `issue unlock NUMBER` unlocks the conversation through `gh issue unlock NUMBER --repo OWNER/REPO` with no additional flags.
+- On success, return `{ "number", "target": "issue", "locked": false }`.
+- Errors: `github_cli` when the provider call fails, with no success output and no provider diagnostics.
+
+**Acceptance:** `issue unlock 12` forwards only the repository context and reports `locked: false`; provider failure emits a structured error and no partial stdout.
+**Verification:** `tests/cli_issues.rs` covers the exact invocation, the unlock result, and safe provider failure.
+
+
 ### Proposed extension RF-WI.5: Private semantic declaration on issue create
 **Priority:** Proposed | **Status:** Proposed | **Dependencies:** RF-WI.1, RF-PRV.1
 
@@ -111,11 +183,13 @@ These require a focused architecture decision; this proposal selects no flag, st
 - `defaults.github.issue.labelCandidates` limits the repository labels supplied to `DecisionModel` for `@auto` during issue create/edit. `defaults.github.issue.project.autoSelectFields` opts in to dynamic selection for exactly the listed Project fields during issue creation. Only single-select and iteration fields are model-selectable; their discovered options are sent together with title/body and any `@auto` label candidates in one model request. Existing configured or explicit values suppress selection of their matching fields. Scores below 0.8 leave a field unset; a tied best score fails before issue creation. Model/configuration/output errors also fail before issue creation.
 - Project schema and values are discovered dynamically through the authenticated GitHub GraphQL interface. Supported direct assignments: text, number, date, single-select option, and iteration. Unknown fields, unsupported types, invalid values, and unknown options fail before issue creation.
 - After issue creation, Project membership and each field are applied serially. These remote writes are not transactional. A later failure returns generic `partial_success` details identifying the created issue and completed/pending operations; workctl never retries the create automatically.
-- GitHub issue editing accepts repeated `--project-field NAME=VALUE` and `--clear-project-field NAME` against the in-scope configured Project. Validate all fields before writes; reject duplicate assignments, set/clear overlaps, incompatible Project removal, and mismatched explicit Project titles. Do not reapply creation defaults or automatic field selection, or automatically add membership. Field-only changes skip the issue mutation. Combined changes write the issue first and fields serially; a failure after any completed issue or field write returns `partial_success` with completed/pending operations and no retry. Preserve issue timestamp guards; Project fields have no issue-revision concurrency guarantee.
+- GitHub issue editing accepts repeated `--project-field NAME=VALUE` and `--clear-project-field NAME` against the in-scope configured Project. Validate all fields before writes; reject duplicate assignments, set/clear overlaps, incompatible Project removal, and mismatched explicit Project titles. Do not reapply creation defaults or configured `autoSelectFields`, or automatically add membership. Field-only changes skip the issue mutation. Combined changes write the issue first and fields serially; a failure after any completed issue or field write returns `partial_success` with completed/pending operations and no retry. Preserve issue timestamp guards; Project fields have no issue-revision concurrency guarantee.
+- `issue edit --project-field NAME=@auto` explicitly selects only that single-select or iteration field. One model request per target uses the final proposed title/body, discovered options, and any automatic label candidates. A unique best score >= 0.8 plans a field write; a lower score or tied best score plans no write for that field and preserves its current value. Reject unsupported/unknown fields and model errors before writes. Recheck the issue revision before mutation; reset automatic field choices between batch targets. If no field or other change is selected, return the current issue without writes.
 
-**Acceptance:** Typed field values map to discovered field IDs/options/iterations; configured defaults and CLI overrides yield one Project operation; out-of-scope repositories do not inherit Project membership or fields; Project schema/value errors cause no issue write; automatic selection is allowlisted, combines with label classification in one request, respects explicit/configured precedence, and leaves low-confidence fields unset; ties and model failures cause no issue write; post-create failures report safe partial-success details without leaking provider diagnostics or retrying.
+**Acceptance:** Typed field values map to discovered IDs/options/iterations; creation defaults and CLI overrides yield one Project operation only in scope. Create automatic selection is allowlisted and respects explicit/configured precedence; create ties fail. Edit automatic selection touches only explicitly named fields, uses final text, preserves current values on low confidence/ties, and isolates choices between targets. Both paths combine automatic labels and options in one request per issue, reject schema/model failures before writes, and report non-retriable partial success after completed remote writes.
 **Verification:** Isolated CLI integration tests for field types, precedence, candidate filtering, selection threshold/tie, pre-write rejection, and partial failure; `project_edit_*` and `project_field_only_edit_reports_completed_operations_on_later_failure` exercise edit validation, scope, guards, field-only writes, clear operations, and serial partial failure.
 Selection regressions `unique_best_option_wins_over_lower_ties_in_every_order` and `tied_maximum_is_rejected_in_every_order` verify that only a tie at the final maximum is ambiguous; lower-scoring ties do not suppress a unique winner, regardless of option order.
+Edit regressions `project_auto_edit_selects_only_requested_fields_and_preserves_uncertainty`, `project_auto_edit_fails_closed_before_writes`, and `edit_choices_reset_between_targets_and_preserve_manual_assignments` verify explicit scope, final text, label/field separation, threshold/tie preservation, failure closure, and per-target selection isolation.
 
 
 ### RF-PR.1: Create a pull request
@@ -177,6 +251,17 @@ Selection regressions `unique_best_option_wins_over_lower_ties_in_every_order` a
 **Acceptance:** A failing report parses into checks with lowercased states; `no checks reported` yields an empty array; `--required` appears in the invocation.
 **Verification:** Integration test `checks_parse_failing_reports_and_treat_missing_checks_as_empty`.
 
+### RF-PR.14: Watch pull-request checks with a bounded wait
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-PR.5
+
+- `pr checks NUMBER --watch` delegates waiting to native `gh pr checks --watch`. Optional `--interval` accepts 1–300 seconds and `--fail-fast` stops on the first failed check; both require `--watch`. `--watch-timeout` also requires watch and accepts 1–3600 seconds.
+- Watch mode defaults to a 600-second absolute process deadline; the timeout option overrides it. Non-watch calls retain the existing process deadline. The process runner kills the direct child on deadline and returns a safe `timeout` error with no partial stdout.
+- Parse valid check JSON regardless of provider exit status, retaining failing and pending reports as data. Preserve the no-checks empty-array behavior. Do not add an independent polling loop or automatically retry.
+- Errors: existing `github_cli` for provider failure or invalid report, `timeout` when the watch deadline expires.
+
+**Acceptance:** Watch forwards only requested native flags; clap rejects watch-only controls outside watch mode and values outside their bounds before provider access. Failing check JSON remains successful evidence; an expired wait emits no success JSON and exposes no provider diagnostics. Without watch, command behavior remains unchanged.
+**Verification:** `tests/cli_prs.rs` covers native watch option forwarding, failing and pending report preservation, argument bounds, and safe timeout.
+
 ### RF-PR.6: Submit a review
 **Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.1, RF-CFG.2
 
@@ -189,15 +274,16 @@ Selection regressions `unique_best_option_wins_over_lower_ties_in_every_order` a
 **Verification:** Integration tests `review_merge_ready_close_and_reopen_use_the_gh_commands` and `review_without_an_event_is_a_usage_error`.
 
 ### RF-PR.7: Merge a pull request
-**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.1, RF-CFG.2
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.1, RF-CFG.2, RF-CFG.4
 
 - `pr merge NUMBER` merges the pull request; `--method merge|squash|rebase` selects the method, `--delete-branch` deletes the local and remote branch after merging, and `--auto` queues the merge once the repository requirements are met.
-- `--method` is passed to `gh` only when given: workctl applies no default merge policy, so an explicit method is required whenever `gh` cannot infer one.
-- The result is `{ "number", "method": null|"merge"|"squash"|"rebase", "auto" }`.
-- Errors: `github_cli` when the call fails.
+- Method precedence: explicit `--method`, then `defaults.github.pr.mergeMethod`, then GitHub CLI inference. With no config, behavior remains unchanged.
+- `defaults.github.pr.deleteBranch` is a boolean defaulting to `false`. `true` adds `--delete-branch` to every merge; the CLI's `--delete-branch` can enable deletion for one merge. There is no per-command inverse flag.
+- The result is `{ "number", "method": null|"merge"|"squash"|"rebase", "auto" }`; `method` reports the effective configured/explicit method, or null when GitHub CLI chooses.
+- Errors: `config` for malformed/unknown config values; `github_cli` when the merge call fails.
 
-**Acceptance:** `--method squash --delete-branch --auto` invokes `gh pr merge` with those flags and reports the method and auto state; omitting `--method` passes no method flag to `gh`.
-**Verification:** Integration test `review_merge_ready_close_and_reopen_use_the_gh_commands`.
+**Acceptance:** An explicit method overrides the configured default; an omitted method passes the configured method or otherwise leaves choice to `gh`. `deleteBranch: false` preserves existing behavior, `true` adds `--delete-branch`, and the explicit CLI flag enables deletion when the setting is false. Configuration errors fail before provider access.
+**Verification:** `tests/cli_prs.rs` covers configured defaults and CLI method precedence; config unit tests cover valid/invalid values and false defaults.
 
 ### RF-PR.8: Edit a pull request
 **Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.1, RF-CFG.2
@@ -242,6 +328,85 @@ Selection regressions `unique_best_option_wins_over_lower_ties_in_every_order` a
 
 **Acceptance:** `pr reopen 42 --comment back` invokes `gh pr reopen` with the comment and reports `state: open`.
 **Verification:** Integration test `review_merge_ready_close_and_reopen_use_the_gh_commands`.
+
+### RF-PR.12: Summarize pull-request review and merge evidence
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-PR.3, RF-PR.5
+
+- `pr status NUMBER` returns a compact object with pull-request number, title, state, draft flag, URL, base/head refs, nullable mergeability and review decision, and `required_checks`.
+- Read status metadata with one `gh pr view --json` call without requesting the body; read checks with one `gh pr checks --required` call. Each invocation uses the existing subprocess timeout and output caps; no pagination is performed. Preserve the provider's check state/bucket/link data.
+- Missing mergeability or review decision is `null`. An empty `required_checks` array means no checks were reported; it does not establish that repository policy requires none or that the PR is ready to merge. The result has no inferred readiness boolean.
+- The two remote reads are sequential and not an atomic snapshot. A failure of either read returns an error without successful partial status output. A non-PR target returns `not_pull_request`; valid pending or failing check reports are evidence, not command failures.
+
+**Acceptance:** The status contains only concise review/mergeability context and required checks, excludes the PR body, preserves failing/pending check records, and never declares readiness. Empty checks remain inconclusive; a non-PR target stops before the checks call and no partial stdout is emitted.
+**Verification:** `tests/cli_prs.rs` covers JSON and text status, required-check invocation, missing checks, and non-PR failure.
+
+### RF-PR.13: Update a pull-request branch
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.1, RF-CFG.2
+
+- `pr update-branch NUMBER` updates the remote pull-request branch with the latest base branch changes through `gh pr update-branch NUMBER --repo OWNER/REPO`.
+- Default behavior merges the latest base branch into the pull-request branch with a merge commit. `--rebase` instead rebases the pull-request branch onto the latest base branch.
+- The operation does not check out or modify a local branch and does not fetch a separate PR snapshot.
+- On success, return `{ "number", "rebase" }`, where `rebase` reflects the selected strategy. Text output states the PR number and whether merge or rebase was requested.
+- Errors: `github_cli` when the provider operation fails. Provider diagnostics are withheld and stdout remains empty.
+
+**Acceptance:** The default invocation omits `--rebase`; the explicit flag reaches `gh` and selects rebase. Success reports the selected strategy; provider failure emits a structured error and no partial success output.
+**Verification:** `tests/cli_prs.rs` covers default and rebase argument forwarding, text output, and safe provider failure.
+
+### RF-PR.15: Check out a pull request branch
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.1, RF-CFG.2
+
+- `pr checkout NUMBER` checks out the pull request's branch in the caller's current worktree by delegating to `gh pr checkout NUMBER --repo OWNER/REPO`.
+- Use GitHub CLI's default checkout behavior. Do not pass `--force` or expose branch-name, detached-HEAD, or separate-worktree options; `gh` remains responsible for branch lookup and its normal local-change protections.
+- On success, JSON output is `{ "number" }`; text output states that the PR was checked out. The command changes the current local branch.
+- Errors: `github_cli` when checkout fails. Provider diagnostics are withheld and stdout remains empty.
+
+**Acceptance:** A successful checkout changes the current worktree to the PR branch; provider failure returns no partial success and no diagnostic leakage; `--force` is rejected before provider access. The exact `gh pr checkout` invocation includes repository context and never includes `--force`.
+**Verification:** `tests/cli_prs.rs` runs against a temporary Git worktree, verifies its current branch after checkout, and covers safe failure and rejection of force.
+
+### RF-PR.16: Comment on a pull request
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.1, RF-CFG.2
+
+- `pr comment NUMBER` adds one top-level comment through `gh pr comment NUMBER --repo OWNER/REPO --body-file -`.
+- Comment text comes from exactly one of `--body TEXT` or `--body-file FILE`, where `-` reads standard input. Omitting both, or supplying both, is a usage error before provider access. Blank text is `invalid_input`.
+- The body travels on stdin, never in process arguments, and text read from a file or stdin is capped at 1 MiB.
+- On success, return `{ "number", "target": "pr" }`; text output states that the pull request was commented.
+- Errors: `github_cli` when the provider call fails, with no success output and no provider diagnostics. The command never edits or lists existing comments and never opens an editor or browser.
+
+**Acceptance:** `pr comment 42 --body "Looks good"` sends the text to `gh` on stdin and reports the pull request as the target; a missing or blank body fails before provider access; provider failure emits a structured error and no partial stdout.
+**Verification:** `tests/cli_prs.rs` covers stdin delivery, the result shape, missing-body rejection, and safe provider failure.
+
+### RF-PR.17: Lock a pull-request conversation
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.1, RF-CFG.2
+
+- `pr lock NUMBER` locks the conversation through `gh pr lock NUMBER --repo OWNER/REPO`.
+- `--reason` accepts only `off_topic`, `resolved`, `spam`, or `too_heated`; any other value is a usage error before provider access. An omitted reason forwards no `--reason`.
+- On success, return `{ "number", "target": "pr", "locked": true }`.
+- Errors: `github_cli` when the provider call fails, with no success output and no provider diagnostics.
+
+**Acceptance:** `pr lock 42 --reason too_heated` forwards the reason and reports `locked: true`; an unsupported reason fails during argument parsing before any provider call.
+**Verification:** `tests/cli_prs.rs` covers reason forwarding, the lock result, the invalid-reason rejection, and safe provider failure.
+
+### RF-PR.18: Unlock a pull-request conversation
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.1, RF-CFG.2
+
+- `pr unlock NUMBER` unlocks the conversation through `gh pr unlock NUMBER --repo OWNER/REPO` with no additional flags.
+- On success, return `{ "number", "target": "pr", "locked": false }`.
+- Errors: `github_cli` when the provider call fails, with no success output and no provider diagnostics.
+
+**Acceptance:** `pr unlock 42` forwards only the repository context and reports `locked: false`; provider failure emits a structured error and no partial stdout.
+**Verification:** `tests/cli_prs.rs` covers the exact invocation, the unlock result, and safe provider failure.
+
+### RF-PR.19: Revert a pull request
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.1, RF-CFG.2
+
+- `pr revert NUMBER` opens a new pull request that reverts the merge of NUMBER through `gh pr revert NUMBER --repo OWNER/REPO`.
+- `--title TEXT` sets the new title. `--body TEXT` or `--body-file FILE`, where `-` reads standard input, sets the new body; supplying both is a usage error, and the body travels on stdin rather than in process arguments. `--draft` opens the revert as a draft. No option is inferred when omitted.
+- On success, return `{ "number", "pull_request" }`, where `number` is the reverted pull request and `pull_request` is the newly created one, parsed from the URL `gh pr revert` prints. Text output names both numbers.
+- Creating the revert is a remote write and is never retried automatically.
+- Errors: `github_cli` when the provider call fails, with no success output. A successful call whose output is not a pull-request URL returns `provider_response`.
+
+**Acceptance:** `pr revert 42 --title "Revert feature" --body ... --draft` forwards exactly those native flags, delivers the body on stdin, and reports the new pull-request number; provider failure emits a structured error and no partial stdout.
+**Verification:** `tests/cli_prs.rs` covers flag and stdin forwarding, both reported numbers, and safe provider failure.
 
 ### RF-GL.1: GitLab provider and grammar
 **Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.2
@@ -334,6 +499,16 @@ Selection regressions `unique_best_option_wins_over_lower_ties_in_every_order` a
 **Acceptance:** Strict config rejects unknown keys and malformed project profiles; repository scope prevents defaults crossing repository boundaries; field and label-candidate precedence follows the rules above.
 **Verification:** Config and CLI integration tests with isolated worktree roots.
 
+### RF-CFG.4: GitHub pull-request merge defaults
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.1, RF-CFG.2
+
+- `defaults.github.pr` accepts `mergeMethod` (`merge`, `squash`, or `rebase`) and boolean `deleteBranch` (default `false`).
+- Explicit `pr merge --method` overrides `mergeMethod`; otherwise the configured method is used, falling back to GitHub CLI inference. `--delete-branch` enables deletion for one invocation; a configured `deleteBranch: true` applies to every merge because no inverse CLI flag exists.
+- Invalid method values and unknown keys fail closed as `config` errors before provider access. Local `defaults` replaces the shared defaults object as a whole, consistent with RF-CFG.3.
+
+**Acceptance:** Valid typed defaults are applied with the precedence above; missing deleteBranch behaves as false; invalid method values and unknown config keys prevent provider access.
+**Verification:** Config unit tests and isolated `tests/cli_prs.rs` merge invocations.
+
 ### RF-OUT.1: Output contract
 **Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CLI.1
 
@@ -361,14 +536,14 @@ Selection regressions `unique_best_option_wins_over_lower_ties_in_every_order` a
 ### RNF-SEC.2: DecisionModel credential and data boundary
 **Priority:** Must Have | **Status:** In Progress | **Dependencies:** RF-WI.1, RF-WI.4
 
-- Model requests occur only when issue create/edit includes `@auto` in an existing label argument. Other code-host operations do not send work-item text to a model.
-- The DecisionModel package receives provider-neutral work-item title/description and candidate labels; it excludes credentials, comments, URLs, and unrelated code-host metadata.
+- Model requests occur only for issue create/edit automatic labels or opted-in Project field selection. Other operations do not send work-item text to a model.
+- The DecisionModel package receives provider-neutral work-item title/description and named candidates. Credentials and unrelated code-host metadata are not fetched for model context.
 - `DECISION_MODEL_API_KEY` is read only for the selected hosted Jev, Laya, or GLiDE adapter, sent only to its fixed HTTPS endpoint, and never stored, logged, or included in errors.
 - `DECISION_MODEL_BASE_URL` configures the OpenAI-compatible local LLM service and must be loopback. Local adapters do not receive hosted credentials.
 - Requests and responses are bounded at 2 MiB and 1 MiB. Redirects are disabled. Model failures and malformed/incomplete label scores fail closed with safe errors; no retries occur.
 - Generic LLM scores are generated estimates and are not represented as calibrated model-native probabilities.
 
-**Acceptance:** No model/config/key read occurs without `@auto`; missing hosted credentials fail before code-host access; model inputs exclude unrelated metadata; local non-loopback URLs, oversized payloads, redirects, and invalid scores are rejected without a label write.
+**Acceptance:** No model/config/key read occurs without one of the explicit model-triggering flows; missing hosted credentials fail before code-host access; model inputs exclude unrelated metadata; local non-loopback URLs, oversized payloads, redirects, and invalid scores fail closed before writes.
 **Verification:** Built-binary isolated code-host fixture, local OpenAI-compatible HTTP fixture, and adapter HTTP tests.
 
 ### RNF-EXT.1: Bounded subprocess execution
@@ -401,7 +576,7 @@ Selection regressions `unique_best_option_wins_over_lower_ties_in_every_order` a
 **Verification:** Release build and binary smoke run.
 
 ### RNF-TST.1: Isolated behavior verification
-**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-WI.1, RF-WI.2, RF-WI.3, RF-WI.4, RF-PR.1, RF-PR.2, RF-PR.3, RF-PR.4, RF-PR.5, RF-PR.6, RF-PR.7, RF-PR.8, RF-PR.9, RF-PR.10, RF-PR.11
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-WI.1, RF-WI.2, RF-WI.3, RF-WI.4, RF-WI.8, RF-WI.9, RF-WI.10, RF-WI.11, RF-WI.12, RF-PR.1, RF-PR.2, RF-PR.3, RF-PR.4, RF-PR.5, RF-PR.6, RF-PR.7, RF-PR.8, RF-PR.9, RF-PR.10, RF-PR.11, RF-PR.16, RF-PR.17, RF-PR.18, RF-PR.19
 
 - Tests exercise consumer-visible CLI output and provider boundaries without requiring live network access or mutating a real repository; Jev calls use a local HTTP fixture.
 - At least one built-binary smoke run exercises a successful command and a failure path.
@@ -414,7 +589,8 @@ Selection regressions `unique_best_option_wins_over_lower_ties_in_every_order` a
 - Jira, local Markdown tracking, provider plugin systems, and project/board administration. Add/remove membership of an existing project is supported through GitHub CLI metadata flags.
 - Branch creation, checkout, or standalone deletion: `git` owns branch lifecycle. `--head`/`--base` select existing branches, and `--delete-branch` asks `gh` to remove a branch only after a merge or close.
 - Workflow/status transitions and label/assignee/milestone *administration*. Explicit assignment/removal of existing issue and PR metadata is supported; `workctl` does not infer or require project-specific values.
-- Inline review comments: `pr review` submits one top-level approve, request-changes, or comment, and `pr close`/`pr reopen` accept a single comment.
+- Inline review comments: `pr review` submits one top-level approve, request-changes, or comment; `pr comment` and `issue comment` each add one top-level comment; `pr close`/`pr reopen` and `issue close`/`issue reopen` accept a single comment.
+- Reading, listing, editing, or deleting existing comments and their threads; comment attachments; and alternate comment targets such as review-comment replies.
 - Listing the pull requests linked to an issue.
 - Relationships, checklists, and issue-comment threads.
 - Attachment listing, removal, or download; upload to issues/PRs is through `gh` 2.99.0 or newer.
@@ -431,3 +607,5 @@ Selection regressions `unique_best_option_wins_over_lower_ties_in_every_order` a
 - **Draft:** a pull request explicitly marked not ready for review; `pr ready` clears the flag and `pr ready --undo` sets it.
 - **Repository target:** `owner/repo`, selected explicitly or from the Git `origin` remote.
 - **Worktree config:** optional project configuration found at the Git root; local config is untracked and overrides the shared file.
+- **Conversation lock:** the provider-side state that prevents new comments on an issue or pull request; `lock` sets it with an optional reason, `unlock` clears it.
+- **Revert pull request:** a new pull request that reverts the merge of an existing pull request, opened by `pr revert`; identified by the number `gh pr revert` prints.

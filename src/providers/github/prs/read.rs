@@ -1,10 +1,16 @@
+use std::time::Duration;
+
 use crate::domain::{AppError, CheckRun, PullRequest, PullRequestSummary};
-use crate::providers::PrQuery;
-use crate::providers::github::prs::{GitHubPulls, mapping};
+use crate::providers::github::prs::{mapping, GitHubPulls};
+use crate::providers::{PrChecksOptions, PrQuery};
 
 const SHOW_FIELDS: &str = "number,title,body,state,isDraft,url,baseRefName,headRefName,author,createdAt,updatedAt,mergedAt,mergeable,reviewDecision,labels,assignees";
+const STATUS_FIELDS: &str =
+    "number,title,state,isDraft,url,baseRefName,headRefName,mergeable,reviewDecision";
 const LIST_FIELDS: &str = "number,title,state,isDraft,url,baseRefName,headRefName,updatedAt";
 const CHECK_FIELDS: &str = "name,state,bucket,description,link,workflow";
+
+const PR_CHECKS_WATCH_DEADLINE: Duration = Duration::from_secs(600);
 
 pub(super) fn list(
     provider: &GitHubPulls,
@@ -66,6 +72,26 @@ pub(super) fn show(provider: &GitHubPulls, number: u64) -> Result<PullRequest, A
     mapping::pull_request(&output.stdout)
 }
 
+pub(super) fn status(
+    provider: &GitHubPulls,
+    number: u64,
+) -> Result<crate::domain::PullRequestStatus, AppError> {
+    let args = [
+        "pr".to_owned(),
+        "view".to_owned(),
+        number.to_string(),
+        "--repo".to_owned(),
+        provider.repo.clone(),
+        "--json".to_owned(),
+        STATUS_FIELDS.to_owned(),
+    ];
+    let output = provider.run_gh_raw(&args, None)?;
+    if !output.success {
+        return Err(AppError::not_pull_request());
+    }
+    mapping::pull_request_status(&output.stdout)
+}
+
 pub(super) fn diff(
     provider: &GitHubPulls,
     number: u64,
@@ -88,7 +114,7 @@ pub(super) fn diff(
 pub(super) fn checks(
     provider: &GitHubPulls,
     number: u64,
-    required: bool,
+    options: &PrChecksOptions,
 ) -> Result<Vec<CheckRun>, AppError> {
     let mut args = vec![
         "pr".to_owned(),
@@ -97,16 +123,29 @@ pub(super) fn checks(
         "--repo".to_owned(),
         provider.repo.clone(),
     ];
-    if required {
+    if options.required {
         args.push("--required".to_owned());
+    }
+    if options.watch {
+        args.push("--watch".to_owned());
+    }
+    if let Some(interval) = options.interval {
+        args.push("--interval".to_owned());
+        args.push(interval.to_string());
+    }
+    if options.fail_fast {
+        args.push("--fail-fast".to_owned());
     }
     args.push("--json".to_owned());
     args.push(CHECK_FIELDS.to_owned());
 
-    // `gh pr checks` exits non-zero for failing (1) and pending (8) checks while still printing a
-    // valid report on stdout, and writes "no checks reported" to stderr when the pull request has
-    // none, so the exit status cannot be trusted and the raw result is read instead.
-    let output = provider.run_gh_raw(&args, None)?;
+    // Failing and pending check reports can accompany non-zero exits; parse the payload instead.
+    let output = if options.watch {
+        let timeout = options.watch_timeout.unwrap_or(PR_CHECKS_WATCH_DEADLINE);
+        provider.run_gh_raw_with_deadline(&args, timeout)?
+    } else {
+        provider.run_gh_raw(&args, None)?
+    };
     match mapping::check_runs(&output.stdout) {
         Ok(checks) => Ok(checks),
         Err(_) if String::from_utf8_lossy(&output.stderr).contains("no checks reported") => {

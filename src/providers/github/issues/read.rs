@@ -3,8 +3,8 @@ use std::collections::HashSet;
 use serde::Deserialize;
 
 use crate::domain::{AppError, Issue, IssueSummary, RepositoryLabel};
+use crate::providers::github::issues::{mapping, GitHubIssues};
 use crate::providers::IssueQuery;
-use crate::providers::github::issues::{GitHubIssues, mapping};
 pub(super) fn list(
     provider: &GitHubIssues,
     query: &IssueQuery,

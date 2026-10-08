@@ -1,9 +1,10 @@
 mod mapping;
 mod read;
+mod relationships;
 mod write;
 
 use crate::domain::{AppError, Issue, IssueSummary};
-use crate::providers::{IssuePatch, IssueQuery, NewIssue, WorkItemProvider, resolve_body_change};
+use crate::providers::{resolve_body_change, IssuePatch, IssueQuery, NewIssue, WorkItemProvider};
 #[derive(Debug)]
 pub struct GitHubIssues {
     repo: String,
@@ -72,16 +73,41 @@ impl ProjectCreatePlan {
 
 /// A validated GitHub Project plan for one issue edit.
 ///
-/// Built by [`GitHubIssues::plan_project_edit`] before the remote write. It carries only the
-/// fields the caller explicitly sets or clears, so an edit can never reapply configured defaults
-/// or automatically selected fields.
+/// Built before the remote write. Only explicitly set, cleared, or `@auto` fields
+/// are planned; configured defaults are never reapplied.
 pub struct ProjectEditPlan {
     pub(super) plan: super::projects::ProjectPlan,
+}
+
+impl ProjectEditPlan {
+    pub fn candidates(&self) -> Vec<crate::domain::DecisionCandidate> {
+        self.plan.option_candidates()
+    }
+
+    pub fn has_writes(&self) -> bool {
+        !self.plan.assignments.is_empty()
+    }
+
+    pub fn choose_from_scores(
+        &mut self,
+        scores: &[crate::domain::DecisionScore],
+        threshold: f64,
+    ) -> Result<(), AppError> {
+        self.plan.choose_for_edit(scores, threshold)
+    }
 }
 
 impl GitHubIssues {
     pub fn new(repo: String) -> Self {
         Self { repo }
+    }
+
+    pub fn view(&self, number: u64) -> Result<crate::domain::GitHubIssueView, AppError> {
+        relationships::view(self, number)
+    }
+
+    pub fn blocker_chains(&self, number: u64) -> Result<Vec<String>, AppError> {
+        relationships::blocker_chains(self, number)
     }
 
     /// Discovers the configured Project and validates every requested field value.
@@ -192,5 +218,30 @@ impl WorkItemProvider for GitHubIssues {
 
     fn show(&self, number: u64) -> Result<Issue, AppError> {
         read::show(self, number)
+    }
+    fn close(
+        &self,
+        number: u64,
+        comment: Option<&str>,
+        reason: Option<&str>,
+        duplicate_of: Option<&str>,
+    ) -> Result<(), AppError> {
+        write::close(self, number, comment, reason, duplicate_of)
+    }
+
+    fn reopen(&self, number: u64, comment: Option<&str>) -> Result<(), AppError> {
+        write::reopen(self, number, comment)
+    }
+
+    fn comment(&self, number: u64, body: &str) -> Result<(), AppError> {
+        write::comment(self, number, body)
+    }
+
+    fn lock(&self, number: u64, reason: Option<&str>) -> Result<(), AppError> {
+        write::lock(self, number, reason)
+    }
+
+    fn unlock(&self, number: u64) -> Result<(), AppError> {
+        write::unlock(self, number)
     }
 }

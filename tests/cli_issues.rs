@@ -109,7 +109,6 @@ fn text_output_and_provider_failures_are_safe() {
     assert!(!log.contains("api --method PATCH"));
 }
 
-
 #[test]
 fn removed_suggestion_command_is_rejected_before_github_access() {
     let fixture = Fixture::new();
@@ -139,8 +138,16 @@ fn removed_gliner_model_is_rejected_before_provider_access() {
     let fixture = Fixture::new();
     let output = fixture.run_with_model(
         &[
-            "--provider", "github", "--repo", "owner/repo",
-            "issue", "create", "--title", "Unsupported model", "--label", "@auto",
+            "--provider",
+            "github",
+            "--repo",
+            "owner/repo",
+            "issue",
+            "create",
+            "--title",
+            "Unsupported model",
+            "--label",
+            "@auto",
         ],
         "",
         "fastino/GLiNER2.5-Decide",
@@ -295,7 +302,13 @@ fn invalid_inputs_and_unsupported_provider_fail_before_gh() {
         .take_while(|line| !line.trim().is_empty())
         .filter_map(|line| line.split_whitespace().next())
         .collect();
-    assert_eq!(commands, ["create", "list", "view", "edit"]);
+    assert_eq!(
+        commands,
+        [
+            "create", "list", "blockers", "view", "edit", "close", "reopen", "comment", "lock",
+            "unlock"
+        ]
+    );
     assert!(!fixture.log.exists());
     assert!(
         Command::new("git")
@@ -480,7 +493,9 @@ fn configured_project_fields_are_selected_and_written() {
         let mut request = vec![0; length];
         reader.read_exact(&mut request).expect("read model request");
         let request: serde_json::Value = serde_json::from_slice(&request).expect("model JSON");
-        let prompt = request["messages"][1]["content"].as_str().expect("user prompt");
+        let prompt = request["messages"][1]["content"]
+            .as_str()
+            .expect("user prompt");
         assert!(prompt.contains("Project priority"));
         assert!(prompt.contains("Priority=High"));
         assert!(prompt.contains("Priority=Low"));
@@ -496,14 +511,28 @@ fn configured_project_fields_are_selected_and_written() {
     });
     let output = fixture.run_with_model(
         &[
-            "--provider", "github", "--repo", "owner/repo", "issue", "create", "--title",
-            "Project priority", "--body", "Important work", "--label", "@auto",
+            "--provider",
+            "github",
+            "--repo",
+            "owner/repo",
+            "issue",
+            "create",
+            "--title",
+            "Project priority",
+            "--body",
+            "Important work",
+            "--label",
+            "@auto",
         ],
         "",
         "local/test-model",
         Some(&format!("http://{address}/v1")),
     );
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     model.join().expect("model fixture");
     let invocations = fs::read_to_string(&fixture.log).expect("read gh invocations");
     assert_eq!(invocations.matches("api graphql").count(), 1);
@@ -532,7 +561,6 @@ fn explicit_project_field_overrides_auto_selection_without_model_call() {
     let invocations = fs::read_to_string(&fixture.log).expect("read gh invocations");
     assert!(invocations.contains("--field-id PRIORITY_ID --single-select-option-id OPTION_LOW"));
     assert_eq!(invocations.matches("issue create").count(), 1);
-
 }
 
 // RF-WI.6: Low-confidence Project field classifications leave the field unset.
@@ -570,12 +598,25 @@ fn low_confidence_project_field_is_left_unset() {
         .expect("write model response");
     });
     let output = fixture.run_with_model(
-        &["--provider", "github", "--repo", "owner/repo", "issue", "create", "--title", "Uncertain priority"],
+        &[
+            "--provider",
+            "github",
+            "--repo",
+            "owner/repo",
+            "issue",
+            "create",
+            "--title",
+            "Uncertain priority",
+        ],
         "",
         "local/test-model",
         Some(&format!("http://{address}/v1")),
     );
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     model.join().expect("model fixture");
     let invocations = fs::read_to_string(&fixture.log).expect("read gh invocations");
     assert!(invocations.contains("issue create"));
@@ -618,7 +659,16 @@ fn tied_project_field_scores_fail_before_issue_creation() {
         .expect("write model response");
     });
     let output = fixture.run_with_model(
-        &["--provider", "github", "--repo", "owner/repo", "issue", "create", "--title", "Tied priority"],
+        &[
+            "--provider",
+            "github",
+            "--repo",
+            "owner/repo",
+            "issue",
+            "create",
+            "--title",
+            "Tied priority",
+        ],
         "",
         "local/test-model",
         Some(&format!("http://{address}/v1")),
@@ -1034,9 +1084,21 @@ fn project_edit_sets_and_clears_without_issue_or_membership_writes() {
     let fixture = Fixture::new();
     init_configured_project_with_auto_fields(&fixture, r#""Notes":"creation only""#, &["Priority"]);
     let output = fixture.run_issue(
-        &["issue", "edit", "7", "--project-field", "Priority=Low",
-          "--project-field", "Effort=2", "--project-field", "Start date=2026-10-07",
-          "--project-field", "Iteration=Sprint A", "--clear-project-field", "Notes"],
+        &[
+            "issue",
+            "edit",
+            "7",
+            "--project-field",
+            "Priority=Low",
+            "--project-field",
+            "Effort=2",
+            "--project-field",
+            "Start date=2026-10-07",
+            "--project-field",
+            "Iteration=Sprint A",
+            "--clear-project-field",
+            "Notes",
+        ],
         "",
     );
     assert_eq!(success_json(&output)["number"], 7);
@@ -1058,15 +1120,28 @@ fn project_edit_rejects_invalid_requests_before_writes() {
         vec!["--project-field", "Priority=Missing"],
         vec!["--clear-project-field", "Missing"],
         vec!["--project-field", "Effort=NaN"],
-        vec!["--project-field", "Priority=High", "--clear-project-field", "Priority"],
-        vec!["--project-field", "Priority=High", "--remove-project", "Roadmap"],
+        vec![
+            "--project-field",
+            "Priority=High",
+            "--clear-project-field",
+            "Priority",
+        ],
+        vec![
+            "--project-field",
+            "Priority=High",
+            "--remove-project",
+            "Roadmap",
+        ],
         vec!["--project-field", "Priority=High", "--add-project", "Other"],
     ] {
         let fixture = Fixture::new();
         init_configured_project(&fixture, "");
         let mut args = vec!["issue", "edit", "7", "--title", "Must not write"];
         args.extend(flags);
-        assert_eq!(error_json(&fixture.run_issue(&args, ""))["code"], "invalid_input");
+        assert_eq!(
+            error_json(&fixture.run_issue(&args, ""))["code"],
+            "invalid_input"
+        );
         let log = fs::read_to_string(&fixture.log).unwrap_or_default();
         assert!(!log.contains("issue edit"));
         assert!(!log.contains("item-edit"));
@@ -1084,8 +1159,17 @@ fn project_edit_preserves_scope_and_issue_guard() {
     ] {
         let fixture = Fixture::new();
         init_configured_project(&fixture, "");
-        let mut args = vec!["--provider", "github", "--repo", repo, "issue", "edit", "7",
-                            "--project-field", "Priority=High"];
+        let mut args = vec![
+            "--provider",
+            "github",
+            "--repo",
+            repo,
+            "issue",
+            "edit",
+            "7",
+            "--project-field",
+            "Priority=High",
+        ];
         if let Some(timestamp) = extra {
             args.extend(["--expect-updated-at", timestamp]);
         }
@@ -1102,14 +1186,27 @@ fn project_field_only_edit_reports_completed_operations_on_later_failure() {
     let fixture = Fixture::new();
     init_configured_project(&fixture, "");
     let output = fixture.run_issue(
-        &["issue", "edit", "7", "--project-field", "Priority=High",
-          "--clear-project-field", "Notes"],
+        &[
+            "issue",
+            "edit",
+            "7",
+            "--project-field",
+            "Priority=High",
+            "--clear-project-field",
+            "Notes",
+        ],
         "project-second-edit-failure",
     );
     let error = error_json(&output);
     assert_eq!(error["code"], "partial_success");
-    assert_eq!(error["details"]["resource"]["url"], "https://github.com/owner/repo/issues/7");
-    assert_eq!(error["details"]["completed"], serde_json::json!(["Priority"]));
+    assert_eq!(
+        error["details"]["resource"]["url"],
+        "https://github.com/owner/repo/issues/7"
+    );
+    assert_eq!(
+        error["details"]["completed"],
+        serde_json::json!(["Priority"])
+    );
     assert_eq!(error["details"]["pending"], serde_json::json!(["Notes"]));
     assert!(!String::from_utf8_lossy(&output.stderr).contains("private project diagnostic"));
     let log = fs::read_to_string(&fixture.log).unwrap();
@@ -1121,13 +1218,24 @@ fn project_field_only_edit_reports_completed_operations_on_later_failure() {
 #[test]
 fn project_edit_reports_issue_success_and_stops_after_field_failure() {
     for (title, code, completed) in [
-        (Some("Updated title"), "partial_success", serde_json::json!(["issue edit"])),
+        (
+            Some("Updated title"),
+            "partial_success",
+            serde_json::json!(["issue edit"]),
+        ),
         (None, "github_cli", serde_json::Value::Null),
     ] {
         let fixture = Fixture::new();
         init_configured_project(&fixture, "");
-        let mut args = vec!["issue", "edit", "7", "--project-field", "Notes=updated",
-                            "--clear-project-field", "Priority"];
+        let mut args = vec![
+            "issue",
+            "edit",
+            "7",
+            "--project-field",
+            "Notes=updated",
+            "--clear-project-field",
+            "Priority",
+        ];
         if let Some(title) = title {
             args.extend(["--title", title]);
         }
@@ -1136,13 +1244,494 @@ fn project_edit_reports_issue_success_and_stops_after_field_failure() {
         assert_eq!(error["code"], code);
         if title.is_some() {
             assert_eq!(error["details"]["completed"], completed);
-            assert_eq!(error["details"]["pending"], serde_json::json!(["Notes", "Priority"]));
+            assert_eq!(
+                error["details"]["pending"],
+                serde_json::json!(["Notes", "Priority"])
+            );
         }
         let log = fs::read_to_string(&fixture.log).unwrap();
-        assert_eq!(log.matches("issue edit").count(), usize::from(title.is_some()));
+        assert_eq!(
+            log.matches("issue edit").count(),
+            usize::from(title.is_some())
+        );
         assert_eq!(log.matches("project item-edit").count(), 1);
         assert!(log.contains("--field-id NOTES_ID --text updated"));
         assert!(!log.contains("item-add"));
         assert!(!String::from_utf8_lossy(&output.stderr).contains("private project diagnostic"));
     }
+}
+
+fn related_issue(number: u64, repo: &str, state: &str) -> serde_json::Value {
+    serde_json::json!({
+        "number": number, "title": format!("Related {number}"),
+        "state": state, "url": format!("https://github.com/{repo}/issues/{number}")
+    })
+}
+
+fn relation_connection(
+    nodes: Vec<serde_json::Value>,
+    total: usize,
+    cursor: Option<&str>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "nodes": nodes, "totalCount": total,
+        "pageInfo": {"hasNextPage": cursor.is_some(), "endCursor": cursor}
+    })
+}
+
+fn empty_relationships() -> serde_json::Value {
+    serde_json::json!({
+        "issueType": null, "parent": null,
+        "subIssues": relation_connection(vec![], 0, None),
+        "blockedBy": relation_connection(vec![], 0, None),
+        "blocking": relation_connection(vec![], 0, None)
+    })
+}
+
+fn relationship_response(fixture: &Fixture, file: &str, issue: serde_json::Value) {
+    fs::write(
+        fixture.root.join(file),
+        serde_json::to_vec(&serde_json::json!({"data":{"repository":{"issue":issue}}})).unwrap(),
+    )
+    .expect("write relationship response");
+}
+
+// RF-WI.3: View preserves hierarchy and body without repeating blocker information.
+#[test]
+fn view_exposes_native_relationship_direction_and_safe_text() {
+    let fixture = Fixture::new();
+    let mut graph = empty_relationships();
+    graph["issueType"] = serde_json::json!({"name":"Bug"});
+    graph["parent"] = related_issue(1, "owner/epics", "OPEN");
+    graph["subIssues"] =
+        relation_connection(vec![related_issue(8, "owner/repo", "CLOSED")], 1, None);
+    graph["blockedBy"] =
+        relation_connection(vec![related_issue(20, "other/deps", "OPEN")], 1, None);
+    graph["blocking"] =
+        relation_connection(vec![related_issue(21, "owner/repo", "CLOSED")], 1, None);
+    graph["parent"]["title"] = serde_json::json!("Parent\u{1b}[2J");
+    relationship_response(&fixture, "relationship-initial.json", graph);
+    let view = success_json(&fixture.run_issue(&["issue", "view", "7"], ""));
+    assert_eq!(view["body"], "Provider body\n\n## Notes\n\noriginal notes");
+    assert_eq!(view["issue_type"], "Bug");
+    assert_eq!(
+        view["parent"]["url"],
+        "https://github.com/owner/epics/issues/1"
+    );
+    assert_eq!(view["parent"]["state"], "open");
+    assert_eq!(view["sub_issues"][0]["number"], 8);
+    assert_eq!(view["sub_issues"][0]["state"], "closed");
+    assert!(view.get("blocked_by").is_none());
+    assert!(view.get("blocking").is_none());
+
+    let text = fixture.run_issue(&["issue", "view", "7", "--format", "text"], "");
+    assert!(text.status.success());
+    let text = String::from_utf8(text.stdout).unwrap();
+    assert!(
+        text.contains("Parent: #1 Parent\\u{1b}[2J [open] https://github.com/owner/epics/issues/1")
+    );
+    assert!(!text.contains("Blocked by:"));
+    assert!(!text.contains("Blocking:"));
+    assert!(!text.contains('\u{1b}'));
+
+    relationship_response(&fixture, "relationship-initial.json", empty_relationships());
+    let empty = success_json(&fixture.run_issue(&["issue", "view", "7"], ""));
+    assert!(empty["parent"].is_null());
+    assert!(empty["issue_type"].is_null());
+    assert_eq!(empty["sub_issues"], serde_json::json!([]));
+}
+
+// RF-WI.3: Every connection is paginated rather than silently omitting relationships after page one.
+#[test]
+fn view_paginates_each_relationship_connection() {
+    for (native_field, field) in [("subIssues", "sub_issues")] {
+        let fixture = Fixture::new();
+        let mut graph = empty_relationships();
+        let nodes = (100..200)
+            .map(|number| related_issue(number, "owner/repo", "OPEN"))
+            .collect();
+        graph[native_field] = relation_connection(nodes, 101, Some("page-one"));
+        relationship_response(&fixture, "relationship-initial.json", graph);
+        relationship_response(
+            &fixture,
+            "relationship-page.json",
+            serde_json::json!({
+                "relations": relation_connection(vec![related_issue(200, "other/repo", "CLOSED")], 101, None)
+            }),
+        );
+        let view = success_json(&fixture.run_issue(&["issue", "view", "7"], ""));
+        let expected: Vec<_> = (100..200)
+            .map(|number| {
+                serde_json::json!({
+                    "number":number, "title":format!("Related {number}"), "state":"open",
+                    "url":format!("https://github.com/owner/repo/issues/{number}")
+                })
+            })
+            .chain(std::iter::once(serde_json::json!({
+                "number":200, "title":"Related 200", "state":"closed",
+                "url":"https://github.com/other/repo/issues/200"
+            })))
+            .collect();
+        assert_eq!(view[field], serde_json::json!(expected));
+    }
+}
+
+// RF-WI.3: An unavailable, malformed, or truncated graph cannot masquerade as an empty graph.
+#[test]
+fn view_rejects_incomplete_relationship_graphs_without_leaking_diagnostics() {
+    let fixture = Fixture::new();
+    let failure = fixture.run_issue(&["issue", "view", "7"], "relationship-failure");
+    assert_eq!(error_json(&failure)["code"], "github_cli");
+    assert!(failure.stdout.is_empty());
+    assert!(
+        !String::from_utf8_lossy(&failure.stderr).contains("private relationship query diagnostic")
+    );
+
+    let mut missing = empty_relationships();
+    missing.as_object_mut().unwrap().remove("subIssues");
+    let mut missing_parent = empty_relationships();
+    missing_parent.as_object_mut().unwrap().remove("parent");
+    let mut oversized = empty_relationships();
+    oversized["subIssues"] = relation_connection(vec![], 1_001, None);
+    let mut count_mismatch = empty_relationships();
+    count_mismatch["subIssues"] = relation_connection(vec![], 1, None);
+    let mut zero_number = empty_relationships();
+    zero_number["subIssues"] =
+        relation_connection(vec![related_issue(0, "owner/repo", "OPEN")], 1, None);
+    let mut unknown_state = empty_relationships();
+    unknown_state["subIssues"] =
+        relation_connection(vec![related_issue(9, "owner/repo", "UNKNOWN")], 1, None);
+    let mut duplicate = empty_relationships();
+    duplicate["subIssues"] =
+        relation_connection(vec![related_issue(9, "owner/repo", "OPEN"); 2], 2, None);
+    let mut missing_cursor = empty_relationships();
+    missing_cursor["subIssues"] = serde_json::json!({"nodes":[],"totalCount":1,"pageInfo":{"hasNextPage":true,"endCursor":null}});
+
+    for (graph, expected_code) in [
+        (missing, "provider_response"),
+        (missing_parent, "provider_response"),
+        (oversized, "relationship_limit"),
+        (count_mismatch, "provider_response"),
+        (zero_number, "provider_response"),
+        (unknown_state, "provider_response"),
+        (duplicate, "provider_response"),
+        (missing_cursor, "provider_response"),
+    ] {
+        relationship_response(&fixture, "relationship-initial.json", graph);
+        let output = fixture.run_issue(&["issue", "view", "7"], "");
+        assert_eq!(error_json(&output)["code"], expected_code);
+        assert!(output.stdout.is_empty());
+    }
+
+    fs::write(
+        fixture.root.join("relationship-initial.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "data":{"repository":{"issue":empty_relationships()}},
+            "errors":[{"message":"private GraphQL error"}]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let error = fixture.run_issue(&["issue", "view", "7"], "");
+    assert_eq!(error_json(&error)["code"], "provider_response");
+    assert!(!String::from_utf8_lossy(&error.stderr).contains("private GraphQL error"));
+
+    let mut graph = empty_relationships();
+    graph["subIssues"] = relation_connection(
+        vec![related_issue(10, "owner/repo", "OPEN")],
+        3,
+        Some("same"),
+    );
+    relationship_response(&fixture, "relationship-initial.json", graph);
+    relationship_response(
+        &fixture,
+        "relationship-page.json",
+        serde_json::json!({
+            "relations":relation_connection(vec![related_issue(11, "owner/repo", "OPEN")], 3, Some("same"))
+        }),
+    );
+    let output = fixture.run_issue(&["issue", "view", "7"], "");
+    assert_eq!(error_json(&output)["code"], "provider_response");
+    assert!(output.stdout.is_empty());
+}
+// RF-WI.7: blocker chains are complete, compact, ordered, and fail closed.
+#[test]
+fn blockers_print_open_chains_and_omit_closed_edges() {
+    let fixture = Fixture::new();
+    let write_graph = |number: u64, nodes: Vec<serde_json::Value>| {
+        let count = nodes.len();
+        let graph = serde_json::json!({
+            "data":{"repository":{"issue":{"relations":{
+                "nodes":nodes,
+                "totalCount":count,
+                "pageInfo":{"hasNextPage":false,"endCursor":null}
+            }}}}
+        });
+        fs::write(
+            fixture.root.join(format!("blocker-{number}.json")),
+            serde_json::to_vec(&graph).expect("serialize graph"),
+        )
+        .expect("write graph");
+    };
+    let related = |number: u64, repo: &str, state: &str| {
+        serde_json::json!({
+            "number":number,
+            "title":format!("Issue {number}"),
+            "state":state,
+            "url":format!("https://github.com/{repo}/issues/{number}")
+        })
+    };
+    write_graph(
+        30,
+        vec![
+            related(29, "owner/repo", "OPEN"),
+            related(17, "platform/api", "OPEN"),
+            related(40, "owner/repo", "CLOSED"),
+        ],
+    );
+    write_graph(29, vec![related(18, "owner/repo", "OPEN")]);
+    write_graph(18, vec![]);
+    write_graph(17, vec![]);
+
+    let output = fixture.run_issue(&["issue", "blockers", "30"], "blocker-graph");
+    let chains = success_json(&output);
+    assert_eq!(
+        chains,
+        serde_json::json!(["#18 -> #29 -> #30", "platform/api#17 -> #30"])
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("Issue 18"));
+
+    let text = fixture.run_issue(
+        &["issue", "blockers", "30", "--format", "text"],
+        "blocker-graph",
+    );
+    assert!(text.status.success());
+    assert_eq!(
+        String::from_utf8(text.stdout).expect("text chains"),
+        "#18 -> #29 -> #30\nplatform/api#17 -> #30\n"
+    );
+}
+
+#[test]
+fn blockers_empty_closed_and_failure_results_are_unambiguous() {
+    let fixture = Fixture::new();
+    let empty = fixture.run_issue(&["issue", "blockers", "30"], "blocker-empty");
+    assert_eq!(success_json(&empty), serde_json::json!([]));
+    let empty_text = fixture.run_issue(
+        &["issue", "blockers", "30", "--format", "text"],
+        "blocker-empty",
+    );
+    assert!(empty_text.status.success());
+    assert!(empty_text.stdout.is_empty());
+
+    fs::write(&fixture.log, "").expect("reset provider log");
+    let closed = fixture.run_issue(&["issue", "blockers", "30"], "blocker-closed-target");
+    assert_eq!(success_json(&closed), serde_json::json!([]));
+    assert!(
+        !fs::read_to_string(&fixture.log)
+            .expect("read provider log")
+            .contains("graphql")
+    );
+
+    let failed = fixture.run_issue(&["issue", "blockers", "30"], "blocker-failure");
+    assert_eq!(error_json(&failed)["code"], "github_cli");
+    assert!(failed.stdout.is_empty());
+    assert!(!String::from_utf8_lossy(&failed.stderr).contains("private blocker query diagnostic"));
+}
+
+#[test]
+fn blockers_reject_cycles_and_depth_limits_without_partial_output() {
+    let fixture = Fixture::new();
+    let cycle = fixture.run_issue(&["issue", "blockers", "30"], "blocker-cycle");
+    assert_eq!(error_json(&cycle)["code"], "provider_response");
+    assert!(cycle.stdout.is_empty());
+
+    let deep = fixture.run_issue(&["issue", "blockers", "125"], "blocker-depth");
+    assert_eq!(error_json(&deep)["code"], "relationship_limit");
+    assert!(deep.stdout.is_empty());
+}
+
+// RF-WI.6: Explicit auto edits preserve fields on uncertainty and never reapply create defaults.
+#[test]
+fn project_auto_edit_selects_only_requested_fields_and_preserves_uncertainty() {
+    for (high, low, expected) in [
+        (0.8, 0.2, Some("OPTION_HIGH")),
+        (0.79, 0.2, None),
+        (0.9, 0.9, None),
+    ] {
+        let fixture = Fixture::new();
+        init_configured_project_with_auto_fields(
+            &fixture,
+            r#""Priority":"Low","Notes":"creation default""#,
+            &["Iteration"],
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind model");
+        let address = listener.local_addr().unwrap();
+        let model = thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("model request");
+            let mut reader = std::io::BufReader::new(stream);
+            let mut length = 0;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" {
+                    break;
+                }
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    length = value.trim().parse::<usize>().unwrap();
+                }
+            }
+            let mut request = vec![0; length];
+            reader.read_exact(&mut request).unwrap();
+            let request: serde_json::Value = serde_json::from_slice(&request).unwrap();
+            let prompt = request["messages"][1]["content"].as_str().unwrap();
+            assert!(prompt.contains("Final title"));
+            assert!(prompt.contains("Added acceptance"));
+            assert!(prompt.contains("original notes"));
+            assert!(!prompt.contains("Iteration=Sprint A"));
+            let suggestions = serde_json::json!({"suggestions":[
+                {"label":"Priority=High","probability":high},
+                {"label":"Priority=Low","probability":low},
+                {"label":"bug","probability":0.9},
+                {"label":"docs","probability":0.1}
+            ]});
+            let response =
+                serde_json::json!({"choices":[{"message":{"content":suggestions.to_string()}}]})
+                    .to_string();
+            write!(reader.into_inner(), "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", response.len(), response).unwrap();
+        });
+        let result = fixture.run_with_model(
+            &[
+                "--provider",
+                "github",
+                "--repo",
+                "owner/repo",
+                "issue",
+                "edit",
+                "7",
+                "--title",
+                "Final title",
+                "--append-body",
+                "Added acceptance",
+                "--add-label",
+                "@auto",
+                "--project-field",
+                "Priority=@auto",
+            ],
+            "",
+            "local/test-model",
+            Some(&format!("http://{address}/v1")),
+        );
+        model.join().unwrap();
+        success_json(&result);
+        let log = fs::read_to_string(&fixture.log).unwrap();
+        assert!(log.contains("--add-label bug"));
+        assert!(!log.contains("--add-label Priority="));
+        assert!(!log.contains("--field-id NOTES_ID"));
+        assert!(!log.contains("--field-id ITERATION_ID"));
+        assert!(!log.contains("project item-add"));
+        match expected {
+            Some(option) => assert!(log.contains(&format!(
+                "--field-id PRIORITY_ID --single-select-option-id {option}"
+            ))),
+            None => assert!(!log.contains("project item-edit")),
+        }
+    }
+}
+
+// RF-WI.6: Missing credentials and invalid/unsupported automatic fields never write.
+#[test]
+fn project_auto_edit_fails_closed_before_writes() {
+    let fixture = Fixture::new();
+    init_configured_project(&fixture, "");
+    let missing = fixture.run_issue(
+        &["issue", "edit", "7", "--project-field", "Priority=@auto"],
+        "",
+    );
+    assert_eq!(error_json(&missing)["code"], "decision_authentication");
+    assert!(!fixture.log.exists());
+    for value in ["Effort=@auto", "Unknown=@auto"] {
+        let result = fixture.run_with_model(
+            &[
+                "--provider",
+                "github",
+                "--repo",
+                "owner/repo",
+                "issue",
+                "edit",
+                "7",
+                "--project-field",
+                value,
+            ],
+            "",
+            "local/test-model",
+            Some("http://127.0.0.1:1/v1"),
+        );
+        assert_eq!(error_json(&result)["code"], "invalid_input");
+        let log = fs::read_to_string(&fixture.log).unwrap();
+        assert!(!log.contains("issue edit"));
+        assert!(!log.contains("project item-edit"));
+    }
+}
+// RF-WI.8-RF-WI.12: Native close, reopen, comments, and conversation locks.
+#[test]
+fn issue_lifecycle_comments_and_conversation_lock_use_gh_native_commands() {
+    let fixture = Fixture::new();
+
+    let closed = fixture.run_issue(
+        &[
+            "issue",
+            "close",
+            "12",
+            "--comment",
+            "Fixed",
+            "--reason",
+            "completed",
+        ],
+        "",
+    );
+    assert_eq!(success_json(&closed)["state"], "closed");
+
+    let duplicate = fixture.run_issue(
+        &[
+            "issue",
+            "close",
+            "12",
+            "--duplicate-of",
+            "https://github.com/owner/repo/issues/9",
+        ],
+        "",
+    );
+    assert_eq!(success_json(&duplicate)["state"], "closed");
+
+    let reopened =
+        fixture.run_issue(&["issue", "reopen", "12", "--comment", "Reopened"], "");
+    assert_eq!(success_json(&reopened)["state"], "open");
+
+    let comment = fixture.run_issue(&["issue", "comment", "12", "--body", "Comment body"], "");
+    assert_eq!(success_json(&comment)["target"], "issue");
+    assert_eq!(
+        fs::read_to_string(&fixture.input).expect("read comment input"),
+        "Comment body"
+    );
+
+    let locked = fixture.run_issue(&["issue", "lock", "12", "--reason", "resolved"], "");
+    assert_eq!(success_json(&locked)["locked"], true);
+    let unlocked = fixture.run_issue(&["issue", "unlock", "12"], "");
+    assert_eq!(success_json(&unlocked)["locked"], false);
+
+    let log = fs::read_to_string(&fixture.log).expect("read gh arguments");
+    assert!(log.contains("issue close 12 --repo owner/repo --comment Fixed --reason completed"));
+    assert!(log.contains(
+        "issue close 12 --repo owner/repo --duplicate-of https://github.com/owner/repo/issues/9"
+    ));
+    assert!(log.contains("issue reopen 12 --repo owner/repo --comment Reopened"));
+    assert!(log.contains("issue comment 12 --repo owner/repo --body-file -"));
+    assert!(log.contains("issue lock 12 --repo owner/repo --reason resolved"));
+    assert!(log.contains("issue unlock 12 --repo owner/repo"));
+
+    let invalid = fixture.run_issue(&["issue", "comment", "12"], "");
+    assert_eq!(error_json(&invalid)["code"], "invalid_input");
+    let invalid_lock = fixture.run_issue(&["issue", "lock", "12", "--reason", "unknown"], "");
+    assert!(!invalid_lock.status.success());
 }

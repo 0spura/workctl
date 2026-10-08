@@ -30,6 +30,23 @@ pub struct Defaults {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GithubDefaults {
     pub issue: Option<GithubIssueDefaults>,
+    pub pr: Option<GithubPrDefaults>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GithubMergeMethod {
+    Merge,
+    Squash,
+    Rebase,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GithubPrDefaults {
+    pub merge_method: Option<GithubMergeMethod>,
+    #[serde(default)]
+    pub delete_branch: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -105,9 +122,10 @@ fn validate(config: &Config) -> Result<(), AppError> {
             || project.fields.iter().any(|(name, value)| {
                 name.trim().is_empty() || name.contains('=') || value.trim().is_empty()
             })
-            || project.auto_select_fields.iter().any(|name| {
-                name.trim().is_empty() || name.contains('=')
-            })
+            || project
+                .auto_select_fields
+                .iter()
+                .any(|name| name.trim().is_empty() || name.contains('='))
             || has_duplicates(&project.auto_select_fields)
         {
             return Err(AppError::config("GitHub Project defaults are invalid"));
@@ -221,7 +239,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use super::load;
+    use super::{load, GithubMergeMethod};
     use crate::config::Provider;
 
     static NEXT_DIR: AtomicUsize = AtomicUsize::new(0);
@@ -288,6 +306,44 @@ mod tests {
             .expect("issue defaults");
         assert!(issue.labels.is_empty());
         assert_eq!(issue.label_candidates, ["docs"]);
+    }
+
+    #[test]
+    fn github_pr_merge_defaults_parse_method_and_boolean_branch_policy() {
+        let root = TempRoot::new();
+        fs::write(
+            root.0.join(".workctl.json"),
+            r#"{"defaults":{"github":{"pr":{"mergeMethod":"squash"}}}}"#,
+        )
+        .expect("write valid PR defaults");
+        let config = load(&root.0).expect("load valid PR defaults");
+        let pr = config.defaults.unwrap().github.unwrap().pr.unwrap();
+        assert!(matches!(pr.merge_method, Some(GithubMergeMethod::Squash)));
+        assert!(!pr.delete_branch);
+
+        fs::write(
+            root.0.join(".workctl.json"),
+            r#"{"defaults":{"github":{"pr":{"deleteBranch":true}}}}"#,
+        )
+        .expect("write branch deletion default");
+        let config = load(&root.0).expect("load branch deletion default");
+        assert!(
+            config
+                .defaults
+                .unwrap()
+                .github
+                .unwrap()
+                .pr
+                .unwrap()
+                .delete_branch
+        );
+
+        fs::write(
+            root.0.join(".workctl.json"),
+            r#"{"defaults":{"github":{"pr":{"mergeMethod":"fast"}}}}"#,
+        )
+        .expect("write unsupported merge method");
+        assert_eq!(load(&root.0).unwrap_err().code, "config");
     }
 
     #[test]

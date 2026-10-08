@@ -161,3 +161,14 @@ pub(super) fn github_issue_defaults(
         Ok(None)
     }
 }
+
+pub(super) fn github_pr_defaults() -> Result<crate::config::GithubPrDefaults, AppError> {
+    let cwd = std::env::current_dir()
+        .map_err(|_| AppError::context("could not determine the current directory"))?;
+    let config = crate::config::load_for_cwd(Path::new(&cwd))?;
+    Ok(config
+        .defaults
+        .and_then(|defaults| defaults.github)
+        .and_then(|github| github.pr)
+        .unwrap_or_default())
+}

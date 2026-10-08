@@ -43,6 +43,22 @@ pub struct PullRequestSummary {
 }
 
 #[derive(Debug, Serialize)]
+pub struct PullRequestStatus {
+    pub number: u64,
+    pub title: String,
+    pub state: PullRequestState,
+    pub draft: bool,
+    pub url: String,
+    pub base_ref: String,
+    pub head_ref: String,
+    /// `mergeable`, `conflicting`, or `unknown`.
+    pub mergeable: Option<String>,
+    /// `approved`, `changes_requested`, or `review_required`.
+    pub review_decision: Option<String>,
+    pub required_checks: Vec<CheckRun>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct CheckRun {
     pub name: String,
     /// Check state, lowercased (for example `success`, `pending`, `failure`).

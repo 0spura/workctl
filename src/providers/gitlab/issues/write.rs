@@ -1,7 +1,10 @@
 use crate::domain::{AppError, Issue};
 use crate::providers::gitlab::issues::{GitLabIssueCreate, GitLabIssueUpdate, GitLabIssues};
 
-pub(super) fn create(provider: &GitLabIssues, issue: &GitLabIssueCreate) -> Result<Issue, AppError> {
+pub(super) fn create(
+    provider: &GitLabIssues,
+    issue: &GitLabIssueCreate,
+) -> Result<Issue, AppError> {
     if issue.description == "-" {
         return Err(AppError::invalid_input(
             "a description consisting only of '-' cannot be passed to glab",
@@ -124,7 +127,6 @@ fn read_back(provider: &GitLabIssues, number: u64) -> Result<Issue, AppError> {
                 Err(AppError::gitlab_write_uncertain())
             }
         })
-
 }
 fn push_values(args: &mut Vec<String>, flag: &str, values: &[String]) {
     for value in values {

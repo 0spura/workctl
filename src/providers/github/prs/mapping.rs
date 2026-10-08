@@ -1,7 +1,9 @@
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::domain::{AppError, CheckRun, PullRequest, PullRequestState, PullRequestSummary};
+use crate::domain::{
+    AppError, CheckRun, PullRequest, PullRequestState, PullRequestStatus, PullRequestSummary,
+};
 
 #[derive(Deserialize)]
 struct CliUser {
@@ -59,6 +61,23 @@ struct CliPullRequestSummary {
 }
 
 #[derive(Deserialize)]
+struct CliPullRequestStatus {
+    number: u64,
+    title: String,
+    state: String,
+    #[serde(rename = "isDraft")]
+    is_draft: bool,
+    url: String,
+    #[serde(rename = "baseRefName")]
+    base_ref_name: String,
+    #[serde(rename = "headRefName")]
+    head_ref_name: String,
+    mergeable: Option<String>,
+    #[serde(rename = "reviewDecision")]
+    review_decision: Option<String>,
+}
+
+#[derive(Deserialize)]
 struct CliCheckRun {
     name: String,
     state: String,
@@ -113,6 +132,32 @@ pub fn pull_request(bytes: &[u8]) -> Result<PullRequest, AppError> {
             .into_iter()
             .map(|assignee| assignee.login)
             .collect(),
+    })
+}
+
+pub fn pull_request_status(bytes: &[u8]) -> Result<PullRequestStatus, AppError> {
+    let response: CliPullRequestStatus =
+        serde_json::from_slice(bytes).map_err(|_| AppError::provider_response())?;
+    if response.number == 0
+        || response.title.trim().is_empty()
+        || response.url.is_empty()
+        || response.base_ref_name.is_empty()
+        || response.head_ref_name.is_empty()
+    {
+        return Err(AppError::provider_response());
+    }
+    Ok(PullRequestStatus {
+        number: response.number,
+        title: response.title,
+        state: parse_state(&response.state)?,
+        draft: response.is_draft,
+        url: response.url,
+        base_ref: response.base_ref_name,
+        head_ref: response.head_ref_name,
+        mergeable: non_empty(response.mergeable).map(|value| value.to_ascii_lowercase()),
+        review_decision: non_empty(response.review_decision)
+            .map(|value| value.to_ascii_lowercase()),
+        required_checks: Vec::new(),
     })
 }
 

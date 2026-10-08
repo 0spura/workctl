@@ -25,6 +25,13 @@ pub(super) fn run_gh_raw(
     runner::run("gh", args, input, None).map_err(map_process_error)
 }
 
+pub(super) fn run_gh_raw_with_deadline(
+    args: &[String],
+    deadline: std::time::Duration,
+) -> Result<runner::ProcessOutput, AppError> {
+    runner::run_with_deadline("gh", args, None, None, deadline).map_err(map_process_error)
+}
+
 pub(super) fn authenticate() -> Result<(), AppError> {
     let args = ["auth", "status", "--hostname", "github.com"].map(str::to_owned);
     let output = runner::run("gh", &args, None, None).map_err(map_process_error)?;

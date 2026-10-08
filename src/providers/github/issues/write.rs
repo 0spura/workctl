@@ -1,5 +1,5 @@
 use crate::domain::{AppError, Issue};
-use crate::providers::github::issues::{GitHubIssues, NativeIssueEdit, read};
+use crate::providers::github::issues::{read, GitHubIssues, NativeIssueEdit};
 use crate::providers::{IssuePatch, NewIssue};
 
 pub(super) fn create(
@@ -176,6 +176,101 @@ pub(super) fn edit_native(
     })
 }
 
+/// Closes an issue and forwards only the explicitly requested native close options.
+pub(super) fn close(
+    provider: &GitHubIssues,
+    number: u64,
+    comment: Option<&str>,
+    reason: Option<&str>,
+    duplicate_of: Option<&str>,
+) -> Result<(), AppError> {
+    let mut args = vec![
+        "issue".to_owned(),
+        "close".to_owned(),
+        number.to_string(),
+        "--repo".to_owned(),
+        provider.repo.clone(),
+    ];
+    if let Some(comment) = comment {
+        args.extend(["--comment".to_owned(), comment.to_owned()]);
+    }
+    if let Some(reason) = reason {
+        args.extend(["--reason".to_owned(), reason.to_owned()]);
+    }
+    if let Some(duplicate_of) = duplicate_of {
+        args.extend(["--duplicate-of".to_owned(), duplicate_of.to_owned()]);
+    }
+    provider.run_gh(&args, None)?;
+    Ok(())
+}
+
+pub(super) fn reopen(
+    provider: &GitHubIssues,
+    number: u64,
+    comment: Option<&str>,
+) -> Result<(), AppError> {
+    let mut args = vec![
+        "issue".to_owned(),
+        "reopen".to_owned(),
+        number.to_string(),
+        "--repo".to_owned(),
+        provider.repo.clone(),
+    ];
+    if let Some(comment) = comment {
+        args.extend(["--comment".to_owned(), comment.to_owned()]);
+    }
+    provider.run_gh(&args, None)?;
+    Ok(())
+}
+
+pub(super) fn comment(
+    provider: &GitHubIssues,
+    number: u64,
+    body: &str,
+) -> Result<(), AppError> {
+    let args = vec![
+        "issue".to_owned(),
+        "comment".to_owned(),
+        number.to_string(),
+        "--repo".to_owned(),
+        provider.repo.clone(),
+        "--body-file".to_owned(),
+        "-".to_owned(),
+    ];
+    provider.run_gh(&args, Some(body.as_bytes().to_vec()))?;
+    Ok(())
+}
+
+pub(super) fn lock(
+    provider: &GitHubIssues,
+    number: u64,
+    reason: Option<&str>,
+) -> Result<(), AppError> {
+    let mut args = vec![
+        "issue".to_owned(),
+        "lock".to_owned(),
+        number.to_string(),
+        "--repo".to_owned(),
+        provider.repo.clone(),
+    ];
+    if let Some(reason) = reason {
+        args.extend(["--reason".to_owned(), reason.to_owned()]);
+    }
+    provider.run_gh(&args, None)?;
+    Ok(())
+}
+
+pub(super) fn unlock(provider: &GitHubIssues, number: u64) -> Result<(), AppError> {
+    let args = vec![
+        "issue".to_owned(),
+        "unlock".to_owned(),
+        number.to_string(),
+        "--repo".to_owned(),
+        provider.repo.clone(),
+    ];
+    provider.run_gh(&args, None)?;
+    Ok(())
+}
 /// Validates the issue-level change and sends one `gh issue edit`.
 ///
 /// The native fields join the same invocation as the generic patch, each as its own `gh` flag.

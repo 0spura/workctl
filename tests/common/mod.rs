@@ -94,6 +94,56 @@ if [ "$1" = "project" ] && [ "$2" = "item-edit" ]; then
     exit 0
 fi
 if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then
+    case "$WORKCTL_GH_MODE" in
+        blocker-failure)
+            printf '%s\n' 'private blocker query diagnostic' >&2
+            exit 1
+            ;;
+        blocker-graph|blocker-cycle|blocker-depth)
+            issue_number=""
+            for argument in "$@"; do
+                case "$argument" in
+                    number=*) issue_number="${argument#number=}" ;;
+                esac
+            done
+            response="$(dirname "$WORKCTL_GH_LOG")/blocker-${issue_number}.json"
+            if [ -f "$response" ]; then
+                cat "$response"
+            elif [ "$WORKCTL_GH_MODE" = "blocker-cycle" ] && [ "$issue_number" = "30" ]; then
+                printf '%s\n' '{"data":{"repository":{"issue":{"relations":{"nodes":[{"number":18,"title":"Related 18","state":"OPEN","url":"https://github.com/owner/repo/issues/18"}],"totalCount":1,"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}'
+            elif [ "$WORKCTL_GH_MODE" = "blocker-cycle" ] && [ "$issue_number" = "18" ]; then
+                printf '%s\n' '{"data":{"repository":{"issue":{"relations":{"nodes":[{"number":30,"title":"Related 30","state":"OPEN","url":"https://github.com/owner/repo/issues/30"}],"totalCount":1,"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}'
+            elif [ "$WORKCTL_GH_MODE" = "blocker-depth" ] && [ "$issue_number" -gt 100 ]; then
+                next_number=$((issue_number - 1))
+                printf '%s\n' "{\"data\":{\"repository\":{\"issue\":{\"relations\":{\"nodes\":[{\"number\":$next_number,\"title\":\"Related $next_number\",\"state\":\"OPEN\",\"url\":\"https://github.com/owner/repo/issues/$next_number\"}],\"totalCount\":1,\"pageInfo\":{\"hasNextPage\":false,\"endCursor\":null}}}}}}"
+            else
+                printf '%s\n' '{"data":{"repository":{"issue":{"relations":{"nodes":[],"totalCount":0,"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}'
+            fi
+            exit 0
+            ;;
+    esac
+    if [ "$WORKCTL_GH_MODE" = "blocker-empty" ]; then
+        printf '%s\n' '{"data":{"repository":{"issue":{"relations":{"nodes":[],"totalCount":0,"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}'
+        exit 0
+    fi
+    case "$*" in
+        *issueType*|*relations:*)
+            if [ "$WORKCTL_GH_MODE" = "relationship-failure" ]; then
+                printf '%s\n' 'private relationship query diagnostic' >&2
+                exit 1
+            fi
+            case "$*" in
+                *relations:*) response="$(dirname "$WORKCTL_GH_LOG")/relationship-page.json" ;;
+                *) response="$(dirname "$WORKCTL_GH_LOG")/relationship-initial.json" ;;
+            esac
+            if [ -f "$response" ]; then
+                cat "$response"
+            else
+                printf '%s\n' '{"data":{"repository":{"issue":{"issueType":null,"parent":null,"subIssues":{"nodes":[],"totalCount":0,"pageInfo":{"hasNextPage":false,"endCursor":null}},"blockedBy":{"nodes":[],"totalCount":0,"pageInfo":{"hasNextPage":false,"endCursor":null}},"blocking":{"nodes":[],"totalCount":0,"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}'
+            fi
+            exit 0
+            ;;
+    esac
     printf '%s\n' '{"data":{"repositoryOwner":{"projectV2":{"id":"PVT_owner_project","title":"Roadmap","fields":{"nodes":[{"__typename":"ProjectV2SingleSelectField","id":"PRIORITY_ID","name":"Priority","dataType":"SINGLE_SELECT","options":[{"id":"OPTION_HIGH","name":"High"},{"id":"OPTION_LOW","name":"Low"}]},{"__typename":"ProjectV2Field","id":"EFFORT_ID","name":"Effort","dataType":"NUMBER"},{"__typename":"ProjectV2Field","id":"START_ID","name":"Start date","dataType":"DATE"},{"__typename":"ProjectV2Field","id":"NOTES_ID","name":"Notes","dataType":"TEXT"},{"__typename":"ProjectV2IterationField","id":"ITERATION_ID","name":"Iteration","dataType":"ITERATION","configuration":{"iterations":[{"id":"ITERATION_A","title":"Sprint A"}]}}],"pageInfo":{"hasNextPage":false}}}}}}'
     exit 0
 fi
@@ -121,10 +171,22 @@ if [ "$1" = "api" ]; then
     fi
     if [ "$WORKCTL_GH_MODE" = "pull-request" ]; then
         printf '%s\n' '{"number":7,"title":"Not an issue","body":null,"state":"OPEN","html_url":"https://github.com/owner/repo/pull/7","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z","pull_request":{}}'
+    elif [ "$WORKCTL_GH_MODE" = "blocker-closed-target" ]; then
+        printf '%s\n' '{"number":7,"title":"Provider title","body":"Provider body","state":"CLOSED","html_url":"https://github.com/owner/repo/issues/7","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z"}'
     else
         printf '%s\n' '{"number":7,"title":"Provider title","body":"Provider body\n\n## Notes\n\noriginal notes","state":"OPEN","html_url":"https://github.com/owner/repo/issues/7","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z"}'
     fi
     exit 0
+fi
+if [ "$1" = "issue" ]; then
+    case "$2" in
+        close|reopen|comment|lock|unlock)
+            if [ "$2" = "comment" ]; then
+                cat > "$WORKCTL_GH_INPUT"
+            fi
+            exit 0
+            ;;
+    esac
 fi
 if [ "$1" = "label" ] && [ "$2" = "list" ]; then
     printf '%s\n' '[{"name":"bug","description":"Broken behavior"},{"name":"docs","description":null}]'
@@ -166,12 +228,19 @@ if [ "$1" = "pr" ] && [ "$2" = "diff" ]; then
     exit 0
 fi
 if [ "$1" = "pr" ] && [ "$2" = "checks" ]; then
+    if [ "$WORKCTL_GH_MODE" = "checks-watch-timeout" ]; then
+        exec sleep 2
+    fi
+    if [ "$WORKCTL_GH_MODE" = "checks-watch-pending" ]; then
+        printf '%s\n' '[{"name":"integration","state":"PENDING","bucket":"pending","description":"queued","link":null,"workflow":"CI"}]'
+        exit 8
+    fi
     if [ "$WORKCTL_GH_MODE" = "checks-none" ]; then
         printf '%s\n' 'no checks reported' >&2
         exit 1
     fi
     printf '%s\n' '[{"name":"build","state":"SUCCESS","bucket":"pass","description":null,"link":"https://example.test/build","workflow":"CI"},{"name":"lint","state":"FAILURE","bucket":"fail","description":"style violations","link":null,"workflow":"CI"}]'
-    if [ "$WORKCTL_GH_MODE" = "checks-failing" ]; then
+    if [ "$WORKCTL_GH_MODE" = "checks-failing" ] || [ "$WORKCTL_GH_MODE" = "checks-watch-fail-fast" ]; then
         exit 1
     fi
     exit 0
@@ -180,9 +249,40 @@ if [ "$1" = "pr" ] && [ "$2" = "review" ]; then
     cat > "$WORKCTL_GH_INPUT"
     exit 0
 fi
+if [ "$1" = "pr" ] && [ "$2" = "checkout" ]; then
+    if [ "$WORKCTL_GH_MODE" = "pr-checkout-failure" ]; then
+        printf '%s\n' 'private provider diagnostic' >&2
+        exit 1
+    fi
+    if [ "$WORKCTL_GH_MODE" = "pr-checkout-git" ]; then
+        git -C "$WORKCTL_GH_CWD_ROOT" checkout -b "pr-$3" >/dev/null 2>&1
+        exit $?
+    fi
+    exit 0
+fi
+if [ "$1" = "pr" ] && [ "$2" = "update-branch" ]; then
+    if [ "$WORKCTL_GH_MODE" = "pr-update-branch-failure" ]; then
+        printf '%s\n' 'private provider diagnostic' >&2
+        exit 1
+    fi
+    exit 0
+fi
 if [ "$1" = "pr" ]; then
     case "$2" in
-        merge|ready|close|reopen)
+        merge|ready|close|reopen|lock|unlock)
+            exit 0
+            ;;
+        comment)
+            case "$*" in
+                *"--body-file -"*) cat > "$WORKCTL_GH_INPUT" ;;
+            esac
+            exit 0
+            ;;
+        revert)
+            case "$*" in
+                *"--body-file -"*) cat > "$WORKCTL_GH_INPUT" ;;
+            esac
+            printf '%s\n' 'https://github.com/owner/repo/pull/90'
             exit 0
             ;;
     esac
@@ -289,6 +389,7 @@ exit 64
             .env("PATH", path)
             .env("WORKCTL_GH_LOG", &self.log)
             .env("WORKCTL_GH_INPUT", &self.input)
+            .env("WORKCTL_GH_CWD_ROOT", &self.root)
             .env("WORKCTL_GH_MODE", mode)
             .env("WORKCTL_GLAB_LOG", &self.glab_log)
             .env("WORKCTL_GLAB_INPUT", &self.glab_input)

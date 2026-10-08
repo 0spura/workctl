@@ -21,7 +21,8 @@ impl AppError {
     ) -> Self {
         Self {
             code: "partial_success",
-            message: "the operation completed partially; inspect the reported resource before retrying",
+            message:
+                "the operation completed partially; inspect the reported resource before retrying",
             details: Some(serde_json::json!({
                 "resource": resource,
                 "completed": completed,
@@ -65,7 +66,6 @@ impl AppError {
             "the GitLab write may have succeeded but its result could not be confirmed; check the issue before retrying",
         )
     }
-
 
     pub const fn gitlab_cli() -> Self {
         Self::new("gitlab_cli", "the GitLab CLI operation failed")
@@ -136,6 +136,13 @@ impl AppError {
         Self::new(
             "provider_response",
             "the provider CLI returned an invalid response",
+        )
+    }
+
+    pub const fn relationship_limit() -> Self {
+        Self::new(
+            "relationship_limit",
+            "the issue blocker graph exceeds supported traversal limits",
         )
     }
 
