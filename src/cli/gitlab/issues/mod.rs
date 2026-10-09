@@ -1,11 +1,13 @@
 mod create;
 mod list;
 mod shared;
+mod state;
 mod update;
 mod view;
 
 pub use create::CreateArgs;
 pub use list::ListArgs;
+pub use state::StateArgs;
 pub use update::UpdateArgs;
 pub use view::ViewArgs;
 
@@ -36,4 +38,22 @@ pub enum IssueAction {
     View(ViewArgs),
     /// Update one issue
     Update(UpdateArgs),
+    /// Close an issue
+    Close(StateArgs),
+    /// Reopen an issue
+    Reopen(StateArgs),
+    /// Subscribe to an issue
+    Subscribe(StateArgs),
+    /// Unsubscribe from an issue
+    Unsubscribe(StateArgs),
+    /// Add a note to an issue
+    Note(NoteArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct NoteArgs {
+    /// GitLab issue IID
+    pub number: crate::cli::common::IssueNumber,
+    #[arg(long, short = 'm', value_parser = crate::cli::common::parse_non_blank)]
+    pub message: String,
 }

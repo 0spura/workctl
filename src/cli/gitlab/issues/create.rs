@@ -38,4 +38,25 @@ pub struct CreateArgs {
     /// Set due date (YYYY-MM-DD)
     #[arg(long = "due-date", value_name = "DATE", value_parser = parse_due_date)]
     pub due_date: Option<String>,
+    /// Add the issue to an epic by ID
+    #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+    pub epic: Option<u64>,
+    /// Link related issue IIDs; values may be comma-separated or repeated
+    #[arg(long = "linked-issues", value_parser = common::parse_non_blank)]
+    pub linked_issues: Vec<String>,
+    /// Relation type for linked issues
+    #[arg(long = "link-type", value_parser = ["relates_to"])]
+    pub link_type: Option<String>,
+    /// Associate a merge request by IID
+    #[arg(long = "linked-mr", value_parser = clap::value_parser!(u64).range(1..))]
+    pub linked_mr: Option<u64>,
+    /// Set an estimate using GitLab duration syntax
+    #[arg(long = "time-estimate", value_parser = common::parse_non_blank)]
+    pub time_estimate: Option<String>,
+    /// Record elapsed time using GitLab duration syntax
+    #[arg(long = "time-spent", value_parser = common::parse_non_blank)]
+    pub time_spent: Option<String>,
+    /// Use a local issue template name
+    #[arg(long, value_parser = common::parse_non_blank)]
+    pub template: Option<String>,
 }

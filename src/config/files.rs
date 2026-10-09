@@ -16,6 +16,7 @@ const MAX_CONFIG_BYTES: usize = 64 * 1024;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Config {
     pub provider: Option<Provider>,
+    pub code_provider: Option<Provider>,
     pub work_item_provider: Option<Provider>,
     pub defaults: Option<Defaults>,
 }
@@ -76,6 +77,7 @@ pub struct GithubProjectDefaults {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ConfigFile {
     provider: Option<Provider>,
+    code_provider: Option<Provider>,
     work_item_provider: Option<Provider>,
     defaults: Option<Defaults>,
 }
@@ -176,6 +178,9 @@ fn merge_file(path: impl AsRef<Path>, config: &mut Config) -> Result<(), AppErro
     if file.provider.is_some() {
         config.provider = file.provider;
     }
+    if file.code_provider.is_some() {
+        config.code_provider = file.code_provider;
+    }
     if file.work_item_provider.is_some() {
         config.work_item_provider = file.work_item_provider;
     }
@@ -239,7 +244,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use super::{load, GithubMergeMethod};
+    use super::{GithubMergeMethod, load};
     use crate::config::Provider;
 
     static NEXT_DIR: AtomicUsize = AtomicUsize::new(0);
@@ -269,18 +274,19 @@ mod tests {
         let root = TempRoot::new();
         fs::write(
             root.0.join(".workctl.json"),
-            r#"{"provider":"github","workItemProvider":"github"}"#,
+            r#"{"provider":"github","codeProvider":"github","workItemProvider":"gitlab"}"#,
         )
         .expect("write shared config");
         fs::write(
             root.0.join(".workctl.local.json"),
-            r#"{"provider":"gitlab"}"#,
+            r#"{"provider":"github","codeProvider":"gitlab"}"#,
         )
         .expect("write local config");
 
         let config = load(&root.0).expect("load valid config");
-        assert_eq!(config.provider, Some(Provider::Gitlab));
-        assert_eq!(config.work_item_provider, Some(Provider::Github));
+        assert_eq!(config.provider, Some(Provider::Github));
+        assert_eq!(config.code_provider, Some(Provider::Gitlab));
+        assert_eq!(config.work_item_provider, Some(Provider::Gitlab));
     }
     #[test]
     fn local_defaults_replace_shared_defaults_as_one_object() {

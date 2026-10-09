@@ -10,16 +10,16 @@ mod lock;
 mod merge;
 mod ready;
 mod reopen;
-mod review;
 mod revert;
+mod review;
 mod shared;
 mod status;
 mod unlock;
 mod update_branch;
 mod view;
 
-use crate::cli::github::prs::{PrAction, PrArgs};
 use crate::cli::GlobalArgs;
+use crate::cli::github::prs::{PrAction, PrArgs};
 use crate::domain::AppError;
 use crate::output::{self, SuccessOutput};
 

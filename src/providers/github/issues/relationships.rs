@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::domain::{AppError, GitHubIssueView, IssueState, RelatedIssue};
-use crate::providers::github::issues::{mapping, read, GitHubIssues};
+use crate::providers::github::issues::{GitHubIssues, mapping, read};
 
 const RELATION_FIELDS: &str =
     "nodes{number title state url} totalCount pageInfo{hasNextPage endCursor}";

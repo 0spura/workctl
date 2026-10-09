@@ -66,6 +66,11 @@ pub enum SuccessOutput {
     Checkout {
         number: u64,
     },
+    GitLabAction {
+        number: u64,
+        action: String,
+    },
+    ProviderData(serde_json::Value),
 }
 
 pub fn write(format: OutputFormat, output: &SuccessOutput) -> Result<(), AppError> {

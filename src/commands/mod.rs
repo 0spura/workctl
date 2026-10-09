@@ -1,5 +1,6 @@
 mod github;
 mod gitlab;
+mod labels;
 mod support;
 
 use crate::cli::{ActiveCommand, GlobalArgs};

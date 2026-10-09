@@ -8,9 +8,7 @@ use super::shared;
 
 pub(super) fn execute(globals: &GlobalArgs, args: CloseArgs) -> Result<SuccessOutput, AppError> {
     let provider = shared::provider(globals)?;
-    let duplicate_of = args
-        .duplicate_of
-        .map(|reference| reference.into_argument());
+    let duplicate_of = args.duplicate_of.map(|reference| reference.into_argument());
     provider.close(
         args.number.0,
         args.comment.as_deref(),

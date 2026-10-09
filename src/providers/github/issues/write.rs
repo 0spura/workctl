@@ -1,5 +1,5 @@
 use crate::domain::{AppError, Issue};
-use crate::providers::github::issues::{read, GitHubIssues, NativeIssueEdit};
+use crate::providers::github::issues::{GitHubIssues, NativeIssueEdit, read};
 use crate::providers::{IssuePatch, NewIssue};
 
 pub(super) fn create(
@@ -223,11 +223,7 @@ pub(super) fn reopen(
     Ok(())
 }
 
-pub(super) fn comment(
-    provider: &GitHubIssues,
-    number: u64,
-    body: &str,
-) -> Result<(), AppError> {
+pub(super) fn comment(provider: &GitHubIssues, number: u64, body: &str) -> Result<(), AppError> {
     let args = vec![
         "issue".to_owned(),
         "comment".to_owned(),

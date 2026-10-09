@@ -4,7 +4,7 @@ mod relationships;
 mod write;
 
 use crate::domain::{AppError, Issue, IssueSummary};
-use crate::providers::{resolve_body_change, IssuePatch, IssueQuery, NewIssue, WorkItemProvider};
+use crate::providers::{IssuePatch, IssueQuery, NewIssue, WorkItemProvider, resolve_body_change};
 #[derive(Debug)]
 pub struct GitHubIssues {
     repo: String,

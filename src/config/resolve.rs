@@ -16,7 +16,7 @@ pub enum Provider {
 }
 
 impl Provider {
-    /// The provider that owns `host`, if it is a host this build can reach.
+    /// The provider that owns `host`, if it is a public provider endpoint.
     pub fn for_host(host: &str) -> Option<Self> {
         match host.trim_end_matches('/').to_ascii_lowercase().as_str() {
             "github.com" => Some(Self::Github),
@@ -36,31 +36,31 @@ impl Provider {
 }
 
 #[derive(Debug)]
-pub struct ResolvedContext {
-    pub repo: String,
-}
-
-#[derive(Debug)]
 struct Remote {
     provider: Provider,
     repo: String,
 }
 
-pub fn resolve_context(
-    explicit_provider: Option<Provider>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProviderSelection {
+    pub code: Provider,
+    pub work_items: Provider,
+}
+
+/// Resolves repository scope for a single provider domain. A remote from another provider may
+/// supply no repository scope for this command; an explicit `--repo` is then required.
+pub fn resolve_domain_context(
+    provider: Provider,
     explicit_repo: Option<&str>,
     cwd: &Path,
-) -> Result<ResolvedContext, AppError> {
+) -> Result<String, AppError> {
     let root = discover::git_root(cwd)?;
-    let config = root
+    let _config = root
         .as_deref()
         .map(files::load)
         .transpose()?
         .unwrap_or_default();
-    let configured_provider = config.work_item_provider.or(config.provider);
-    let needs_remote =
-        explicit_repo.is_none() || (explicit_provider.is_none() && configured_provider.is_none());
-    let remote = if needs_remote {
+    let remote = if explicit_repo.is_none() {
         root.as_deref()
             .map(discover::origin_remote)
             .transpose()?
@@ -70,52 +70,84 @@ pub fn resolve_context(
     } else {
         None
     };
-
-    let provider = explicit_provider
-        .or(configured_provider)
-        .or_else(|| remote.as_ref().map(|remote| remote.provider))
-        .ok_or(AppError::context(
-            "could not determine a work-item provider; specify --provider",
-        ))?;
-    if remote
-        .as_ref()
-        .is_some_and(|remote| remote.provider != provider)
-    {
-        return Err(AppError::provider_mismatch());
+    if let Some(remote) = remote.as_ref() {
+        if remote.provider != provider && explicit_repo.is_none() {
+            return Err(AppError::context(
+                "the selected provider differs from the Git origin; specify --repo",
+            ));
+        }
     }
-
     let repo = match explicit_repo {
         Some(value) => validate_repo(provider, value)?,
         None => remote.map(|remote| remote.repo).ok_or(AppError::context(
             "could not determine a repository; specify --repo",
         ))?,
     };
-    Ok(ResolvedContext { repo })
+    Ok(repo)
 }
 
-/// Selects the provider for building the command grammar, before parsing.
+/// Chooses independent providers for code-host and work-item command groups before parsing.
 ///
-/// The grammar has to exist before clap can read the arguments, so this runs without the
-/// command tree and never fails: an unresolvable or invalid context falls back to GitHub, and
-/// the authoritative resolution reports the real error when the command runs.
-pub fn select_provider(explicit: Option<&str>, cwd: &Path) -> Provider {
-    if let Some(provider) = explicit.and_then(Provider::from_name) {
-        return provider;
-    }
+/// Domain-specific CLI selections override legacy `--provider`; domain-specific configuration
+/// overrides legacy `provider`; the Git origin is the final fallback.
+pub fn select_providers(
+    explicit_code: Option<&str>,
+    explicit_work_items: Option<&str>,
+    legacy_explicit: Option<&str>,
+    cwd: &Path,
+) -> ProviderSelection {
     let Ok(Some(root)) = discover::git_root(cwd) else {
-        return Provider::Github;
+        return selection_from_values(
+            explicit_code,
+            explicit_work_items,
+            legacy_explicit,
+            None,
+            None,
+            None,
+        );
     };
-    if let Ok(config) = files::load(&root) {
-        if let Some(provider) = config.work_item_provider.or(config.provider) {
-            return provider;
-        }
-    }
-    discover::origin_remote(&root)
+    let config = files::load(&root).ok();
+    let remote = discover::origin_remote(&root)
         .ok()
         .flatten()
         .and_then(|url| parse_remote(&url).ok())
-        .map(|remote| remote.provider)
-        .unwrap_or(Provider::Github)
+        .map(|remote| remote.provider);
+    let code_config = config.as_ref().and_then(|config| config.code_provider);
+    let work_item_config = config.as_ref().and_then(|config| config.work_item_provider);
+    let legacy_config = config.as_ref().and_then(|config| config.provider);
+    selection_from_values(
+        explicit_code,
+        explicit_work_items,
+        legacy_explicit,
+        code_config,
+        work_item_config,
+        legacy_config.or(remote),
+    )
+}
+
+fn selection_from_values(
+    explicit_code: Option<&str>,
+    explicit_work_items: Option<&str>,
+    legacy_explicit: Option<&str>,
+    code_config: Option<Provider>,
+    work_item_config: Option<Provider>,
+    fallback: Option<Provider>,
+) -> ProviderSelection {
+    let legacy_explicit = legacy_explicit.and_then(Provider::from_name);
+    ProviderSelection {
+        code: explicit_code
+            .and_then(Provider::from_name)
+            .or(legacy_explicit)
+            .or(code_config)
+            .or(fallback)
+            .unwrap_or(Provider::Github),
+        work_items: explicit_work_items
+            .and_then(Provider::from_name)
+            .or(legacy_explicit)
+            .or(work_item_config)
+            .or(fallback)
+            .unwrap_or(Provider::Github),
+    }
 }
 
 /// Validates a repository argument against the provider that owns it.
@@ -123,6 +155,10 @@ pub fn select_provider(explicit: Option<&str>, cwd: &Path) -> Provider {
 /// A leading known host is accepted only when it is the resolved provider's host, so a caller
 /// cannot point one grammar at another provider's repository.
 pub fn validate_repo(provider: Provider, value: &str) -> Result<String, AppError> {
+    if provider == Provider::Gitlab && value.starts_with("https://") {
+        return validate_gitlab_url(value);
+    }
+
     let segments = value.split('/').collect::<Vec<_>>();
     let segments = match segments.split_first() {
         Some((host, rest)) if Provider::for_host(host).is_some() => {
@@ -131,13 +167,16 @@ pub fn validate_repo(provider: Provider, value: &str) -> Result<String, AppError
                     "--repo host does not match the resolved provider",
                 ));
             }
+            if provider == Provider::Gitlab {
+                return validate_gitlab_path(host, rest);
+            }
             rest
         }
         _ => segments.as_slice(),
     };
     let expected = match provider {
         Provider::Github => "repository must be OWNER/REPO",
-        Provider::Gitlab => "repository must be GROUP/PROJECT or GROUP/SUBGROUP/PROJECT",
+        Provider::Gitlab => "repository must be GROUP/PROJECT or a GitLab project URL",
     };
     if segments.len() < 2 || segments.iter().any(|segment| !valid_component(segment)) {
         return Err(AppError::invalid_input(expected));
@@ -145,7 +184,52 @@ pub fn validate_repo(provider: Provider, value: &str) -> Result<String, AppError
     if provider == Provider::Github && segments.len() > 2 {
         return Err(AppError::invalid_input(expected));
     }
-    Ok(segments.join("/"))
+    match provider {
+        Provider::Github => Ok(segments.join("/")),
+        Provider::Gitlab => Ok(format!("https://gitlab.com/{}", segments.join("/"))),
+    }
+}
+
+fn validate_gitlab_url(value: &str) -> Result<String, AppError> {
+    let url = reqwest::Url::parse(value)
+        .map_err(|_| AppError::invalid_input("GitLab project URL must be an HTTPS project URL"))?;
+    if url.scheme() != "https"
+        || url.host_str().is_none()
+        || Provider::for_host(url.host_str().expect("host checked"))
+            .is_some_and(|owner| owner != Provider::Gitlab)
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(AppError::invalid_input(
+            "GitLab project URL must be an HTTPS project URL",
+        ));
+    }
+    let segments = url
+        .path_segments()
+        .ok_or_else(|| AppError::invalid_input("GitLab project URL must include a project path"))?
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    if segments.len() < 2 || segments.iter().any(|segment| !valid_component(segment)) {
+        return Err(AppError::invalid_input(
+            "GitLab project URL must include a valid group/project path",
+        ));
+    }
+    let host = match url.port() {
+        Some(port) => format!("{}:{port}", url.host_str().expect("host checked")),
+        None => url.host_str().expect("host checked").to_owned(),
+    };
+    Ok(format!("https://{host}/{}", segments.join("/")))
+}
+
+fn validate_gitlab_path(host: &str, segments: &[&str]) -> Result<String, AppError> {
+    if segments.len() < 2 || segments.iter().any(|segment| !valid_component(segment)) {
+        return Err(AppError::invalid_input(
+            "repository must be GROUP/PROJECT or a GitLab project URL",
+        ));
+    }
+    Ok(format!("https://{host}/{}", segments.join("/")))
 }
 
 fn valid_component(value: &str) -> bool {
@@ -192,7 +276,8 @@ fn parse_remote(url: &str) -> Result<Remote, AppError> {
     let provider = Provider::for_host(host).ok_or_else(AppError::provider_unsupported)?;
     let path = path.trim_matches('/');
     let path = path.strip_suffix(".git").unwrap_or(path);
-    let repo = validate_repo(provider, path).map_err(|_| AppError::provider_unsupported())?;
+    let repo = validate_repo(provider, &format!("{host}/{path}"))
+        .map_err(|_| AppError::provider_unsupported())?;
     Ok(Remote { provider, repo })
 }
 #[cfg(test)]
@@ -202,7 +287,7 @@ mod tests {
     use std::process::Command;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use super::{parse_remote, resolve_context, select_provider, validate_repo, Provider};
+    use super::{Provider, parse_remote, resolve_domain_context, select_providers, validate_repo};
 
     static NEXT_DIR: AtomicUsize = AtomicUsize::new(0);
 
@@ -226,61 +311,72 @@ mod tests {
         }
     }
     #[test]
-    fn resolves_config_remote_and_explicit_precedence() {
+    fn resolves_domain_repository_from_its_matching_origin() {
         let root = TempRoot::new();
-        assert!(Command::new("git")
-            .args(["init", "--quiet"])
-            .current_dir(&root.0)
-            .status()
-            .expect("run git init")
-            .success());
-        assert!(Command::new("git")
-            .args([
-                "remote",
-                "add",
-                "origin",
-                "git@github.com:remote-owner/remote-repo.git",
-            ])
-            .current_dir(&root.0)
-            .status()
-            .expect("add origin")
-            .success());
+        assert!(
+            Command::new("git")
+                .args(["init", "--quiet"])
+                .current_dir(&root.0)
+                .status()
+                .expect("run git init")
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .args(["remote", "add", "origin", "git@github.com:owner/repo.git"])
+                .current_dir(&root.0)
+                .status()
+                .expect("add origin")
+                .success()
+        );
         fs::write(
             root.0.join(".workctl.json"),
-            r#"{"provider":"gitlab","workItemProvider":"github"}"#,
+            r#"{"codeProvider":"gitlab","workItemProvider":"github"}"#,
         )
-        .expect("write shared configuration");
+        .expect("write mixed provider configuration");
+        let selected = select_providers(None, None, None, &root.0);
+        assert_eq!(selected.code, Provider::Gitlab);
+        assert_eq!(selected.work_items, Provider::Github);
+        let resolved = resolve_domain_context(selected.work_items, None, &root.0)
+            .expect("resolve issue scope");
+        assert_eq!(resolved, "owner/repo");
 
-        let resolved = resolve_context(None, None, &root.0).expect("resolve GitHub context");
-        assert_eq!(resolved.repo, "remote-owner/remote-repo");
-
-        fs::write(
-            root.0.join(".workctl.local.json"),
-            r#"{"workItemProvider":"gitlab"}"#,
-        )
-        .expect("write local override");
         assert_eq!(
-            resolve_context(None, None, &root.0).unwrap_err().code,
-            "provider_unsupported"
+            resolve_domain_context(Provider::Gitlab, None, &root.0)
+                .unwrap_err()
+                .code,
+            "context"
         );
-
-        let explicit = resolve_context(
-            Some(Provider::Github),
-            Some("explicit-owner/explicit-repo"),
+        let explicit = resolve_domain_context(Provider::Gitlab, Some("group/sub/project"), &root.0)
+            .expect("explicit GitLab scope");
+        assert_eq!(explicit, "https://gitlab.com/group/sub/project");
+        assert!(
+            Command::new("git")
+                .args([
+                    "remote",
+                    "set-url",
+                    "origin",
+                    "https://git.internal.test/team/project.git",
+                ])
+                .current_dir(&root.0)
+                .status()
+                .expect("set self-managed origin")
+                .success()
+        );
+        let explicit = resolve_domain_context(
+            Provider::Gitlab,
+            Some("https://git.internal.test/team/project"),
             &root.0,
         )
-        .expect("explicit overrides");
-        assert_eq!(explicit.repo, "explicit-owner/explicit-repo");
-        fs::write(root.0.join(".workctl.json"), r#"{"repo":"owner/repo"}"#)
+        .expect("explicit GitLab scope overrides an unknown origin host");
+        assert_eq!(explicit, "https://git.internal.test/team/project");
+
+        fs::write(root.0.join(".workctl.json"), r#"{"unknown":"value"}"#)
             .expect("write invalid shared configuration");
         assert_eq!(
-            resolve_context(
-                Some(Provider::Github),
-                Some("explicit-owner/explicit-repo"),
-                &root.0,
-            )
-            .unwrap_err()
-            .code,
+            resolve_domain_context(Provider::Github, Some("owner/repo"), &root.0)
+                .unwrap_err()
+                .code,
             "config"
         );
     }
@@ -330,17 +426,49 @@ mod tests {
         }
         assert_eq!(
             parse_remote("git@gitlab.com:group/subgroup/project.git")
-                .expect("valid remote")
+                .expect("valid GitLab remote")
                 .repo,
-            "group/subgroup/project"
+            "https://gitlab.com/group/subgroup/project"
         );
+    }
+
+    #[test]
+    fn accepts_self_managed_gitlab_urls_and_rejects_unsafe_urls() {
+        assert_eq!(
+            validate_repo(
+                Provider::Gitlab,
+                "https://gitlab.example.test/group/project"
+            )
+            .expect("self-managed GitLab URL"),
+            "https://gitlab.example.test/group/project"
+        );
+        assert_eq!(
+            validate_repo(
+                Provider::Gitlab,
+                "https://gitlab.example.test:8443/group/project"
+            )
+            .expect("custom GitLab port"),
+            "https://gitlab.example.test:8443/group/project"
+        );
+        for invalid in [
+            "http://gitlab.example.test/group/project",
+            "https://user:secret@gitlab.example.test/group/project",
+            "https://gitlab.example.test/group/project?private_token=x",
+            "https://gitlab.example.test/group",
+            "https://github.com/owner/repo",
+        ] {
+            assert!(
+                validate_repo(Provider::Gitlab, invalid).is_err(),
+                "accepted unsafe or incomplete GitLab URL: {invalid}"
+            );
+        }
     }
 
     #[test]
     fn accepts_a_repo_host_only_for_the_matching_provider() {
         assert_eq!(
             validate_repo(Provider::Gitlab, "gitlab.com/group/sub/project").expect("matching host"),
-            "group/sub/project"
+            "https://gitlab.com/group/sub/project"
         );
         assert_eq!(
             validate_repo(Provider::Github, "github.com/owner/repo").expect("matching host"),
@@ -360,57 +488,62 @@ mod tests {
         );
         assert_eq!(
             validate_repo(Provider::Gitlab, "group/sub/project").expect("nested group"),
-            "group/sub/project"
+            "https://gitlab.com/group/sub/project"
         );
-    }
-
-    #[test]
-    fn fails_closed_when_the_remote_belongs_to_another_provider() {
-        let root = TempRoot::new();
-        assert!(Command::new("git")
-            .args(["init", "--quiet"])
-            .current_dir(&root.0)
-            .status()
-            .expect("run git init")
-            .success());
-        assert!(Command::new("git")
-            .args(["remote", "add", "origin", "git@github.com:owner/repo.git"])
-            .current_dir(&root.0)
-            .status()
-            .expect("add origin")
-            .success());
-        assert_eq!(
-            resolve_context(Some(Provider::Gitlab), None, &root.0)
-                .unwrap_err()
-                .code,
-            "provider_unsupported"
-        );
-        let resolved = resolve_context(Some(Provider::Gitlab), Some("group/project"), &root.0)
-            .expect("an explicit repository overrides the remote");
-        assert_eq!(resolved.repo, "group/project");
     }
 
     #[test]
     fn selects_the_grammar_provider_before_parsing() {
         let root = TempRoot::new();
-        assert!(Command::new("git")
-            .args(["init", "--quiet"])
-            .current_dir(&root.0)
-            .status()
-            .expect("run git init")
-            .success());
-        assert_eq!(select_provider(None, &root.0), Provider::Github);
-        assert_eq!(select_provider(Some("gitlab"), &root.0), Provider::Gitlab);
-        assert!(Command::new("git")
-            .args(["remote", "add", "origin", "git@gitlab.com:g/p.git"])
-            .current_dir(&root.0)
-            .status()
-            .expect("add origin")
-            .success());
-        assert_eq!(select_provider(None, &root.0), Provider::Gitlab);
-        assert_eq!(select_provider(Some("bogus"), &root.0), Provider::Gitlab);
+        assert!(
+            Command::new("git")
+                .args(["init", "--quiet"])
+                .current_dir(&root.0)
+                .status()
+                .expect("run git init")
+                .success()
+        );
+        assert_eq!(
+            select_providers(None, None, None, &root.0).code,
+            Provider::Github
+        );
+        assert_eq!(
+            select_providers(None, None, None, &root.0).work_items,
+            Provider::Github
+        );
+        assert_eq!(
+            select_providers(Some("gitlab"), None, None, &root.0).code,
+            Provider::Gitlab
+        );
+        assert_eq!(
+            select_providers(Some("gitlab"), None, None, &root.0).work_items,
+            Provider::Github
+        );
+        assert!(
+            Command::new("git")
+                .args(["remote", "add", "origin", "git@gitlab.com:g/p.git"])
+                .current_dir(&root.0)
+                .status()
+                .expect("add origin")
+                .success()
+        );
+        assert_eq!(
+            select_providers(None, None, None, &root.0).code,
+            Provider::Gitlab
+        );
+        assert_eq!(
+            select_providers(None, None, None, &root.0).work_items,
+            Provider::Gitlab
+        );
+        assert_eq!(
+            select_providers(None, None, Some("bogus"), &root.0).code,
+            Provider::Gitlab
+        );
         fs::write(root.0.join(".workctl.json"), r#"{"provider":"github"}"#)
             .expect("write shared configuration");
-        assert_eq!(select_provider(None, &root.0), Provider::Github);
+        assert_eq!(
+            select_providers(None, None, None, &root.0).code,
+            Provider::Github
+        );
     }
 }

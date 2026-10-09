@@ -5,18 +5,14 @@ pub(super) fn create(
     provider: &GitLabIssues,
     issue: &GitLabIssueCreate,
 ) -> Result<Issue, AppError> {
-    if issue.description == "-" {
-        return Err(AppError::invalid_input(
-            "a description consisting only of '-' cannot be passed to glab",
-        ));
-    }
     let mut args = vec![
         "issue".to_owned(),
         "create".to_owned(),
         "--repo".to_owned(),
         provider.repo_argument(),
         format!("--title={}", issue.title),
-        "--description-file=-".to_owned(),
+        "--description=".to_owned(),
+        "--yes".to_owned(),
     ];
     push_values(&mut args, "--label", &issue.labels);
     push_values(&mut args, "--assignee", &issue.assignees);
@@ -32,9 +28,31 @@ pub(super) fn create(
     if let Some(due_date) = &issue.due_date {
         args.push(format!("--due-date={due_date}"));
     }
+    if let Some(epic) = issue.epic {
+        args.push(format!("--epic={epic}"));
+    }
+    push_values(&mut args, "--linked-issues", &issue.linked_issues);
+    if let Some(link_type) = &issue.link_type {
+        args.push(format!("--link-type={link_type}"));
+    }
+    if let Some(linked_mr) = issue.linked_mr {
+        args.push(format!("--linked-mr={linked_mr}"));
+    }
+    if let Some(time_estimate) = &issue.time_estimate {
+        args.push(format!("--time-estimate={time_estimate}"));
+    }
+    if let Some(time_spent) = &issue.time_spent {
+        args.push(format!("--time-spent={time_spent}"));
+    }
+    if let Some(template) = &issue.template {
+        args.push(format!("--template={template}"));
+    }
 
-    let output = provider.run_glab_mutation(&args, Some(issue.description.as_bytes().to_vec()))?;
+    let output = provider.run_glab_mutation(&args, None)?;
     let number = created_issue_number(provider, &output)?;
+    if !issue.description.is_empty() {
+        provider.set_description(number, &issue.description)?;
+    }
     if issue.weight == Some(0) {
         let args = [
             "issue".to_owned(),
@@ -59,11 +77,6 @@ pub(super) fn update(
             "glab issue update cannot clear an issue description with an empty value",
         ));
     }
-    if patch.description.as_deref() == Some("-") {
-        return Err(AppError::invalid_input(
-            "a description consisting only of '-' cannot be passed to glab",
-        ));
-    }
     if patch.is_empty() {
         return Err(AppError::invalid_input("update requires a field to change"));
     }
@@ -77,9 +90,6 @@ pub(super) fn update(
     ];
     if let Some(title) = &patch.title {
         args.push(format!("--title={title}"));
-    }
-    if patch.description.is_some() {
-        args.push("--description-file=-".to_owned());
     }
     push_values(&mut args, "--label", &patch.labels_add);
     push_values(&mut args, "--unlabel", &patch.labels_remove);
@@ -106,13 +116,12 @@ pub(super) fn update(
         args.push(format!("--due-date={due_date}"));
     }
 
-    provider.run_glab_mutation(
-        &args,
-        patch
-            .description
-            .as_ref()
-            .map(|description| description.as_bytes().to_vec()),
-    )?;
+    if args.len() > 5 {
+        provider.run_glab_mutation(&args, None)?;
+    }
+    if let Some(description) = &patch.description {
+        provider.set_description(number, description)?;
+    }
     read_back(provider, number)
 }
 

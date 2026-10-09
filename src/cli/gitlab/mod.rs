@@ -1,4 +1,5 @@
 pub mod issues;
+pub mod mr;
 
 use clap::Subcommand;
 
@@ -7,4 +8,6 @@ use clap::Subcommand;
 pub enum GitlabCommand {
     /// Manage GitLab issues
     Issue(issues::IssueArgs),
+    /// Manage GitLab merge requests
+    Mr(mr::MergeRequestArgs),
 }

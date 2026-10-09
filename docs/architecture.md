@@ -21,7 +21,7 @@
 > Local PR checkout: [ADR-0032](./adr/0032-github-pr-checkout.md).
 > Issue and PR conversation lifecycle: [ADR-0033](./adr/0033-issue-and-pr-conversation-commands.md).
 
-`workctl` is a local Rust CLI. It manages GitHub issues and pull requests, and GitLab issues, by invoking the provider's own command-line tool. Each provider owns a static grammar that is selected before the arguments are parsed; no MCP server ships.
+`workctl` is a local Rust CLI. It manages GitHub issues and pull requests, and GitLab issues, by invoking the provider's official command-line tool. GitLab project URLs retain their instance host so `glab` can select the matching authenticated host. Each provider owns a static grammar selected before arguments are parsed; no MCP server ships.
 
 ## Module map
 
@@ -68,6 +68,7 @@ src/
         revert.rs              revert-creation arguments
         update_branch.rs       update PR branch arguments
     gitlab/
+      host.rs                 GitLab-only host capability namespace
       mod.rs                  the GitLab grammar enum
       issues/
         mod.rs                issue command grammar and dispatch
@@ -124,7 +125,7 @@ src/
     mod.rs
     discover.rs               Git-root and origin-remote discovery
     files.rs                  strict JSON parse and shared/local merge
-    resolve.rs                grammar selection, provider and repository precedence
+    resolve.rs                independent domain selection and repository scope
   domain/
     mod.rs
     body.rs                   append and section-replacement policy
@@ -159,7 +160,7 @@ src/
         write.rs              create/edit/review/merge/branch-update/ready/close/reopen/comment/lock/unlock/revert
         mapping.rs            pull request and check-run validation and state normalization
     gitlab/
-      mod.rs                  shared `glab` execution, authentication, and the pinned project URL
+      mod.rs                  shared `glab` execution, instance-aware authentication, and project URL
       issues/
         mod.rs                GitLab issue composition and provider-native create/update requests
         read.rs               list/show
@@ -178,21 +179,21 @@ tests/
   config.rs                   isolated config and Git-remote resolution
 ```
 
-GitLab has its own grammar and adapter rather than extending the GitHub one. GitLab issue writes stay provider-owned because their native flags and mutation semantics differ from GitHub's; the adapter returns the shared `Issue` record without widening `WorkItemProvider` or passing provider-specific requests through generic request types.
+GitLab has its own grammar and adapter rather than extending the GitHub one. GitLab issue writes stay provider-owned because their native flags and mutation semantics differ from GitHub's; the adapter returns the shared `Issue` record without passing provider-specific requests through generic request types. Code-host commands (`pr`/`mr`) and work-item commands (`issue`) have independent provider ownership and can use different native grammars in the same invocation surface.
 
 ## Command flow
 
-1. The provider is selected before parsing: explicit `--provider`, merged config, then the Git origin host, falling back to GitHub when nothing resolves. Only the selected provider's grammar is attached to the root command, so the other provider's verbs and flags do not exist for clap to accept.
-2. Clap parses that grammar plus the global `--provider`, `--repo`, and `--format`.
-3. Help/version exit without external dependencies. Grammar selection is best-effort and cannot fail, so help is always available; the authoritative resolution runs when a command executes.
-4. Context resolves provider and repository using command-line overrides, merged config, then Git origin host/repository. A `--repo` host must match the resolved provider, an origin remote belonging to another provider fails closed, and `group/subgroup/project` is accepted only for GitLab.
-5. The selected provider checks its own CLI is available and authenticated — `gh auth status --hostname github.com` or `glab auth status --hostname gitlab.com` — then calls its adapter.
+1. Code-host and work-item providers are selected independently before parsing. Domain-specific flags override legacy `--provider`; domain configuration overrides legacy `provider`; the Git origin is the final fallback. The root command tree combines the selected work-item provider's `issue` command and code-host provider's `pr` or `mr` command.
+2. Clap parses that composite grammar plus global `--provider`, `--code-provider`, `--work-item-provider`, `--repo`, and `--format`.
+3. Help/version exit without external dependencies. Grammar selection is best-effort and cannot fail; authoritative configuration validation and repository resolution run when a command executes.
+4. Repository resolution is scoped to the provider domain owning the command. The origin supplies a repository only when its host matches that provider; otherwise an explicit `--repo` is required. GitLab accepts an HTTPS project URL for a self-managed instance and retains its host; unsupported/unknown provider configuration fails closed.
+5. The selected provider checks its own CLI is available and authenticated — `gh auth status --hostname github.com` or `glab auth status --hostname` with the selected GitLab project host — then calls its adapter.
 6. Issue creation invokes the provider-neutral `DecisionModel` when `@auto` is present, or when the applicable GitHub Project profile has an unclaimed field in `autoSelectFields`. It sends the proposed title/body and allowlisted candidate names/descriptions in one request; repository labels and eligible Project options share the request. The model boundary receives no provider credentials or unrelated metadata. Model configuration and response validation happen before issue creation. Issue edits retain the timestamp guard.
 7. The GitHub adapter invokes `gh issue list` and `gh pr list` for bounded summaries, passing filters through as fixed flags. Issue reads use `gh api`; issue create/edit use `gh issue create|edit`; pull requests use `gh pr` commands. On issue/PR create/edit and `pr edit`, shared GitHub code resolves an explicit `--milestone @current` selector by querying open milestones and choosing the nearest due date today or later; a tie or no eligible milestone fails before the write instead of guessing. An omitted selector makes no request and leaves the field unset, other values pass through verbatim, list filters stay literal, and omission on an edit or update preserves the remote value. Typed optional metadata flags are forwarded directly to `gh`. Create/edit bodies are passed over stdin rather than interpolated into a shell command.
    GitHub issue creation merges configured defaults only for the exact allowlisted repository. With a configured Project profile, it queries Project fields through `gh api graphql`, validates every field/value, and resolves allowlisted auto-select options before creating the issue. Explicit/configured values take precedence; only single-select and iteration fields can be automatically selected. It then adds the issue and applies typed field edits serially. Explicit `--project` is accepted only when the single discovered Project title matches the profile. A failed post-create operation returns a generic partial-success error with the created issue and completed/pending actions; it never retries automatically.
    GitHub issue editing plans only explicitly set/cleared fields against the in-scope Project schema. An explicit `NAME=@auto` resolves discovered single-select/iteration options and shares one model request per issue with automatic labels using final proposed text. A unique best score >= 0.8 plans a field write; low confidence and tied best options preserve the current field. Choices reset between batch targets. The issue revision is rechecked after classification, field-only edits skip the issue mutation, and requested fields are written serially without automatically adding membership. A failure after a completed write reports `partial_success`. Creation defaults and configured `autoSelectFields` are never reapplied during edit; Project field revisions are outside the issue guard.
    Native issue type and parent/sub-issue/blocking changes are provider-owned `NativeIssueEdit` metadata; they share one `gh issue edit` with the generic patch without widening the provider-neutral request. The obsolete generic issue-edit trait method is removed. The GitHub command validates canonical issue references and same-repository targets before provider access, then processes distinct targets serially. It reuses one Project schema plan and one label catalog per invocation; each target retains its own body resolution/model request and timestamp guard. Work scales with the explicit target count and, for Project edits, target count times requested field count; no relationship crawl or unbounded pagination is introduced. A later target failure returns batch `partial_success`; a failed readback after a completed native mutation reports that mutation separately.
-8. The GitLab adapter invokes `glab issue list`, `view`, `create`, and `update` with the project as a full `https://gitlab.com/...` URL. Reads and post-write confirmation use `--output json`; create validates the emitted issue URL and obtains the shared result with `issue view`. Native GitLab write fields remain typed on the GitLab adapter. Description content travels on stdin; empty update descriptions and dash-only descriptions are rejected before provider access. Since `glab issue create` omits `--weight=0`, an explicit zero is applied with a follow-up `glab issue update --weight=0`. The mapping turns `iid` into `number`, `description` into `body`, and `opened` into `open`, and rejects malformed responses instead of emitting partial records.
+8. The GitLab adapter invokes `glab issue list`, `view`, `create`, and `update` with a full HTTPS project URL. The URL host is retained through resolution and passed to `glab auth status --hostname`, including for self-managed instances. Reads and post-write confirmation use `--output json`; create validates the emitted issue URL against the selected project and obtains the shared result with `issue view`. Native GitLab write fields remain typed on the GitLab adapter. Since `glab issue create/update` expose descriptions only as argument values, description bytes are sent through documented `glab api --input -` JSON-body mode, never argv. Empty update descriptions remain rejected before provider access. Since `glab issue create` omits `--weight=0`, an explicit zero is applied with a follow-up `glab issue update --weight=0`. The mapping turns `iid` into `number`, `description` into `body`, and `opened` into `open` without leaking provider-only schema.
 9. Typed results are serialized by `output`; errors are mapped once to a safe JSON error on stderr and nonzero exit.
 
 ## Proposed private semantic declarations
@@ -217,19 +218,19 @@ before implementation; no storage engine or new CLI flag is implied here.
 
 ## Configuration and context
 
-- Discover both config files at the Git worktree root on every command invocation, including when `--provider`/`--repo` override their values; never walk above the root.
-- Both files are strict JSON, regular non-symlink files capped at 64 KiB. Local `provider`, `workItemProvider`, and `defaults` replace their shared top-level counterparts; `defaults` is replaced as a whole, not deep-merged. Unknown keys and malformed files fail closed.
+- Discover both config files at the Git worktree root on every command invocation, including when provider or repository flags override their values; never walk above the root.
+- Both files are strict JSON, regular non-symlink files capped at 64 KiB. Local `provider`, `codeProvider`, and `workItemProvider` replace matching shared fields independently; local `defaults` replaces shared defaults as a whole. Unknown keys and malformed files fail closed.
 - `defaults.github.issue` retains repository-specific issue settings and optional Project profile (`url`, exact `repositories`, string-valued `fields`). `labelCandidates` narrows labels passed to DecisionModel. `defaults.github.pr.mergeMethod` selects `merge|squash|rebase` when `pr merge --method` is omitted; explicit CLI method wins, and absence of both leaves method selection to `gh`.
 - `defaults.github.pr.deleteBranch` is a boolean defaulting to false. True enables branch deletion for all PR merges; `--delete-branch` can enable it for one invocation, but there is no inverse CLI option. Local defaults replace shared defaults as a whole.
-- Provider precedence: CLI `--provider`, local/shared `workItemProvider`, local/shared `provider`, then Git remote host. Grammar selection reads the same sources before parsing, best-effort and without a command tree; the authoritative resolution reports the real error.
-- Repository precedence: CLI `--repo [HOST/]OWNER[/...]/REPO`, then the Git `origin` remote.
-- The repository is validated before inclusion in any provider argument or endpoint path: GitHub accepts exactly `OWNER/REPO`, GitLab accepts `GROUP[/SUBGROUP...]/PROJECT`, and a leading host must belong to the resolved provider. HTTPS and SCP-style SSH GitHub and GitLab remotes are recognized; unknown hosts do not fall back, and an origin remote belonging to another provider than the selected one fails closed.
-- If no Git root exists, both explicit provider and repository are required. There is no persistent `repo` config pin.
+- Provider precedence is independent per domain: domain-specific CLI flag, legacy `--provider`, domain-specific config, legacy config `provider`, then Git origin. Grammar selection reads these sources before parsing, best-effort and without external dependencies; authoritative command execution validates configuration.
+- Repository precedence: CLI `--repo [HOST/]OWNER[/...]/REPO` or, for GitLab, a full HTTPS project URL; otherwise use `origin` only when it belongs to the selected command's provider. A mismatching origin requires explicit `--repo`.
+- The repository is validated before inclusion in any provider argument or endpoint path: GitHub accepts exactly `OWNER/REPO`; GitLab accepts `GROUP[/SUBGROUP...]/PROJECT` or an HTTPS project URL on a self-managed instance. HTTPS and SCP-style SSH GitHub and known GitLab remotes are recognized; unknown hosts do not fall back.
+- If no Git root exists, an explicit provider and repository are required for provider operations. There is no persistent `repo` config pin.
 - Legacy `.mcp-tracker.json` files are neither read nor migrated.
 
 ## Provider seams and models
 
-`WorkItemProvider` owns shared GitHub issue create, list, and show operations. Editing is provider-owned: `GitHubIssues::edit_native` combines the generic body/metadata patch with GitHub type/relationship fields and an optional Project plan. The application/CLI layer receives normalized `Issue` or `IssueSummary`; provider response casing stays inside adapters. `Issue.state` is `open|closed`; an issue summary excludes the body. GitLab writes likewise use provider-owned native request types, rather than forcing distinct update semantics into the shared issue seam.
+`WorkItemProvider` owns shared GitHub issue create, list, and show operations. Editing is provider-owned: `GitHubIssues::edit_native` combines the generic body/metadata patch with GitHub type/relationship fields and an optional Project plan. The application/CLI layer receives normalized `Issue` or `IssueSummary`; provider response casing stays inside adapters. `Issue.state` is `open|closed`; an issue summary excludes the body. GitLab writes likewise use provider-owned native request types, rather than forcing distinct update semantics into the shared issue seam. GitLab issue creation retains native epic, linked issue/MR, time tracking, template, confidentiality, weight, and due-date inputs on its provider request.
 
 GitHub's public `issue view` uses provider-owned `GitHubIssues::view` and `GitHubIssueView`, flattening the basic issue record and adding its type and direct parent/sub-issue relations. It does not query or print blocked-by/blocking connections. `read::show` remains the basic REST read used by mutations and their guards; its pull-request rejection also runs before hierarchy lookup. Reads use `gh api graphql` with owner/name/number/cursor variables and fixed connection names. Sub-issues are paginated at 100 per page, with ten pages and 1,000 nodes, bounding one view to 11 API calls including REST and excluding authentication. The separate `issue blockers` command traverses native `blockedBy` edges under its existing bounded, fail-closed contract; native relationship writes remain unchanged.
 
@@ -257,6 +258,9 @@ Provider asymmetry is expected. Keep only genuinely shared behavior on each seam
 
 Issue and pull-request create/edit map to documented code-host commands, including optional native metadata. Explicit labels remain caller-provided. Issue create/edit may opt into model classification by including `@auto` in `--label`/`--add-label`; the package appends labels scoring >= 0.8 while preserving existing and manual additions. `@auto` is reserved and rejected for label removal. No model call occurs without the sentinel; PRs remain outside this path. The issue adapter fetches the current item before classification, resolves final proposed text, and sets a timestamp guard to reject concurrent changes.
 
+GitLab `issue create/update --label @auto` use that same provider-neutral DecisionModel path. The GitLab adapter builds candidates from native, JSON-formatted `glab label list` pages of 100, stopping at an empty page and rejecting catalogs beyond 1,000 entries or duplicate names. The marker is removed before constructing native issue mutations; without it, neither model setup nor catalog enumeration runs. Update classification uses the final proposed title/description and compares an `updated_at` snapshot after inference, before any write.
+- GitLab merge requests use a separate native adapter and the `mr` grammar; the provider resolver does not expose them as GitHub `pr` aliases. Shared pull-request mapping uses only GitLab fields present in `glab mr` output; GitHub-only mergeability and review-decision values remain absent. MR list filters use named native arguments; list/view use JSON from glab, diff uses `glab mr diff --color=never`, and checkout changes the caller's worktree without force. Lifecycle, merge, approvals/revocation/rebase/subscription/todo, discussions, create/update, approver discovery, linked-issue lookup, and note list/update use native `glab mr` commands. MR descriptions and updated note bodies use stdin/API paths to keep user text out of process arguments. Destructive delete and interactive boards are intentionally excluded; group-scoped issue queries require an explicit group target instead of inferring one from the selected project.
+
 The System One adapters ask one Noul question per candidate label because assignment is multi-valued; answers must match requested IDs/types and probabilities must be in [0,1]. Laya supports at most 32 questions and GLiDE at most 255; Jev supports at most 1,000 labels. The generic LLM adapter requests JSON-formatted estimated scores; those are not native calibrated probabilities. Every adapter validates a complete, unique response against the supplied label catalog.
 
 Native hosted adapters use `DECISION_MODEL_API_KEY` only when selected. Local adapters require no hosted key. The generic local model endpoint must be loopback; it may target any local service implementing the supported OpenAI-compatible contract.
@@ -266,7 +270,7 @@ Text output escapes terminal control characters in provider strings (titles, aut
 ## Process and security boundary
 
 - One process runner owns all `git`, `gh`, and `glab` process creation. It accepts an executable and argument vector; it never invokes a shell.
-- Create/edit bodies are passed on stdin as text to `gh`; GitLab create/update descriptions are passed on stdin to `glab`, never in argv. GitHub API reads and `glab issue` reads use no request body. Each output stream has an 8 MiB cap; one absolute 30-second deadline covers ordinary child completion and pipe/input workers. PR-check watch opts into an absolute 600-second deadline (configurable up to 3600 seconds); a still-running direct child is killed on expiry.
+- Create/edit bodies are passed on stdin to `gh`; GitLab issue descriptions and issue-note bodies use documented `glab api --input -` JSON-body mode because the native `glab issue create/update/note` interfaces have no stdin body option. Merge-request note creation uses native `glab mr note create` stdin mode. Text never appears in child-process arguments. Reads use no request body. Each output stream has an 8 MiB cap; one absolute 30-second deadline covers ordinary child completion and pipe/input workers. PR-check watch opts into an absolute 600-second deadline (configurable up to 3600 seconds); a still-running direct child is killed on expiry.
 
 - `gh` owns GitHub credentials and `glab` owns GitLab credentials. `workctl` checks `gh auth status` or `glab auth status` and discards the output.
 - Hosted model credentials use `DECISION_MODEL_API_KEY` only for an opted-in automatic selection; they are sent only to the selected adapter's fixed HTTPS endpoint. Local service URLs are rejected unless loopback.
@@ -284,7 +288,7 @@ Text output escapes terminal control characters in provider strings (titles, aut
 | More than 1,000 effective label candidates, or the selected adapter's question limit | `decision_input_limit`; model is not called | Configure a smaller `labelCandidates` allowlist |
 | Generic local LLM returns invalid, duplicate, missing, or out-of-range scores | `decision_response`; no label write | Use a compatible model/server response or choose a native decision adapter |
 | `gh` missing or unauthenticated | Safe `dependency`/`authentication` JSON error on stderr; nonzero exit | Install/authenticate `gh`, retry |
-| `glab` missing or unauthenticated | Safe `dependency`/`authentication` JSON error on stderr; nonzero exit | Install/authenticate `glab`, retry |
+| `glab` missing or unauthenticated for the selected GitLab host | Safe `dependency`/`authentication` JSON error on stderr; nonzero exit | Install `glab` and authenticate to that instance |
 | A verb or flag belonging to the other provider's grammar | clap usage error, exit 2, no provider call | Read the resolved provider's help (`workctl issue --help`) |
 | Attachments requested with `gh` older than 2.99.0 or an unparseable version | `dependency_version` JSON error before attachment write | Update `gh` through the user's package manager, or omit `--attach` |
 | Create with attachments exits nonzero | `attachment_create_uncertain`; the item may exist | Check GitHub before retrying |
@@ -303,7 +307,7 @@ Text output escapes terminal control characters in provider strings (titles, aut
 | `pr revert` succeeds but prints no readable pull-request URL | `provider_response` JSON error; the revert may exist | Check GitHub for the revert pull request before retrying |
 | Project membership/field update fails after issue creation | Generic `partial_success` with the created resource and completed/pending operations; no automatic retry | Inspect the resource and resume only the pending operations |
 | GitLab command failure | Generic `gitlab_cli` JSON error; raw stderr withheld | Check `glab` authentication/permissions and retry |
-| GitLab issue write fails, times out, or cannot be confirmed by a read-back | `gitlab_write_uncertain`; the issue may exist or have changed | Check GitLab before retrying |
+| GitLab issue or MR write fails or cannot be confirmed | `gitlab_write_uncertain`; the remote resource may exist or have changed | Inspect GitLab before retrying |
 | Non-write child timeout/output cap exceeded | `timeout`/`output_limit` JSON error | Retry after resolving remote/tool issue |
 | Malformed provider response | `provider_response` JSON error | Report provider contract mismatch |
 

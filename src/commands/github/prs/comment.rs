@@ -13,8 +13,9 @@ pub(super) fn execute(globals: &GlobalArgs, args: CommentArgs) -> Result<Success
         args.body_file.as_deref(),
         "choose either --body or --body-file",
     )?;
-    let body = source
-        .ok_or_else(|| AppError::invalid_input("comment text is required via --body or --body-file"))?;
+    let body = source.ok_or_else(|| {
+        AppError::invalid_input("comment text is required via --body or --body-file")
+    })?;
     let body = parse_non_blank(&body).map_err(AppError::invalid_input)?;
     let provider = shared::provider(globals)?;
     provider.comment(args.number.0, &body)?;

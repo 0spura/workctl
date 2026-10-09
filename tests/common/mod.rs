@@ -307,6 +307,122 @@ if [ "$1" = "auth" ]; then
     fi
     exit 0
 fi
+if [ "$1" = "label" ] && [ "$2" = "list" ]; then
+    if [ "$WORKCTL_GLAB_MODE" = "label-malformed" ]; then
+        printf '%s\n' '[{"name":""}]'
+    elif [ "$WORKCTL_GLAB_MODE" = "label-overflow" ]; then
+        printf '['
+        index=0
+        while [ "$index" -lt 1001 ]; do
+            if [ "$index" -gt 0 ]; then
+                printf ','
+            fi
+            printf '{"name":"generated-%s"}' "$index"
+            index=$((index + 1))
+        done
+        printf ']\n'
+    else
+        case " $* " in
+            *" --page 1 "*)
+                printf '%s\n' '[{"name":"bug","description":"Broken behavior"},{"name":"docs","description":"Documentation"}]'
+                ;;
+            *)
+                printf '%s\n' '[]'
+                ;;
+        esac
+    fi
+    exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "--method" ]; then
+    if [ "$WORKCTL_GLAB_MODE" = "description-write-failure" ]; then
+        printf '%s\n' 'private provider diagnostic' >&2
+        exit 1
+    fi
+    cat > "$WORKCTL_GLAB_INPUT"
+    exit 0
+fi
+if [ "$1" = "mr" ] && [ "$2" = "diff" ]; then
+    printf '%s\n' 'diff --git a/file b/file' '--- a/file' '+++ b/file' '@@ -1 +1 @@' '-old' '+new'
+    exit 0
+fi
+if [ "$1" = "mr" ] && [ "$2" = "create" ]; then
+    if [ "$WORKCTL_GLAB_MODE" = "write-failure" ]; then
+        printf '%s\n' 'private provider diagnostic' >&2
+        exit 1
+    fi
+    printf '%s\n' 'https://gitlab.com/group/sub/project/-/merge_requests/6'
+    exit 0
+fi
+if [ "$1" = "mr" ] && [ "$2" = "note" ] && [ "$3" = "create" ]; then
+    cat > "$WORKCTL_GLAB_INPUT"
+    if [ "$WORKCTL_GLAB_MODE" = "write-failure" ]; then
+        printf '%s\n' 'private provider diagnostic' >&2
+        exit 1
+    fi
+    exit 0
+fi
+if [ "$1" = "mr" ] && [ "$2" = "note" ] && [ "$3" = "list" ]; then
+    printf '%s\n' '[{"id":"abcdef123456","notes":[{"body":"Review note"}]}]'
+    exit 0
+fi
+if [ "$1" = "mr" ] && [ "$2" = "note" ] && [ "$3" = "update" ]; then
+    cat > "$WORKCTL_GLAB_INPUT"
+    if [ "$WORKCTL_GLAB_MODE" = "write-failure" ]; then
+        printf '%s\n' 'private provider diagnostic' >&2
+        exit 1
+    fi
+    exit 0
+fi
+if [ "$1" = "mr" ] && [ "$2" = "note" ]; then
+    case "$3" in
+        resolve|reopen)
+            if [ "$WORKCTL_GLAB_MODE" = "write-failure" ]; then
+                printf '%s\n' 'private provider diagnostic' >&2
+                exit 1
+            fi
+            exit 0
+            ;;
+    esac
+fi
+if [ "$1" = "mr" ]; then
+    case "$2" in
+        close|reopen|approve|revoke|rebase|subscribe|unsubscribe|todo|merge|update)
+            if [ "$WORKCTL_GLAB_MODE" = "write-failure" ]; then
+                printf '%s\n' 'private provider diagnostic' >&2
+                exit 1
+            fi
+            exit 0
+            ;;
+        checkout)
+            if [ "$WORKCTL_GLAB_MODE" = "mr-checkout-git" ]; then
+                git -C "$WORKCTL_GH_CWD_ROOT" checkout -b "mr-$3" >/dev/null 2>&1
+                exit $?
+            fi
+            exit 0
+            ;;
+    esac
+fi
+if [ "$1" = "mr" ] && { [ "$2" = "approvers" ] || [ "$2" = "issues" ]; }; then
+    printf '%s\n' '[{"username":"reviewer"}]'
+    exit 0
+fi
+if [ "$1" = "mr" ] && [ "$2" = "list" ]; then
+    printf '%s\n' '[{"iid":5,"title":"Native merge request","description":"must not appear in list","state":"opened","draft":false,"web_url":"https://gitlab.com/group/sub/project/-/merge_requests/5","target_branch":"main","source_branch":"feature","updated_at":"2026-01-04T00:00:00Z"}]'
+    exit 0
+fi
+if [ "$1" = "mr" ] && [ "$2" = "view" ]; then
+    if [ "$7" = "6" ]; then
+        printf '%s\n' '{"iid":6,"title":"Created merge request","description":"Created MR description","state":"opened","draft":true,"web_url":"https://gitlab.com/group/sub/project/-/merge_requests/6","target_branch":"main","source_branch":"feature","author":{"username":"reviewer"},"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-04T00:00:00Z","labels":["backend"],"assignees":[{"username":"reviewer"}]}'
+    else
+        printf '%s\n' '{"iid":5,"title":"Native merge request","description":"Review details","state":"merged","draft":true,"web_url":"https://gitlab.com/group/sub/project/-/merge_requests/5","target_branch":"main","source_branch":"feature","author":{"username":"reviewer"},"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-04T00:00:00Z","merged_at":"2026-01-04T00:00:00Z","labels":["backend"],"assignees":[{"username":"reviewer"}]}'
+    fi
+    exit 0
+fi
+if [ "$1" = "issue" ]; then
+    case "$2" in
+        close|reopen|subscribe|unsubscribe) exit 0 ;;
+    esac
+fi
 if [ "$1" = "issue" ] && [ "$2" = "list" ]; then
     if [ "$WORKCTL_GLAB_MODE" = "list-failure" ]; then
         printf '%s\n' 'private provider diagnostic' >&2
@@ -329,9 +445,6 @@ if [ "$1" = "issue" ] && [ "$2" = "create" ]; then
     exit 0
 fi
 if [ "$1" = "issue" ] && [ "$2" = "update" ]; then
-    case " $* " in
-        *" --description-file=- "*) cat > "$WORKCTL_GLAB_INPUT" ;;
-    esac
     if [ "$WORKCTL_GLAB_MODE" = "write-failure" ]; then
         printf '%s\n' 'private provider diagnostic' >&2
         exit 1
@@ -339,7 +452,23 @@ if [ "$1" = "issue" ] && [ "$2" = "update" ]; then
     exit 0
 fi
 if [ "$1" = "issue" ] && [ "$2" = "view" ]; then
-    if [ "$7" = "21" ]; then
+    if [ "$WORKCTL_GLAB_MODE" = "update-stale" ]; then
+        count_file="${WORKCTL_GLAB_LOG}.views"
+        count=0
+        if [ -f "$count_file" ]; then
+            count="$(cat "$count_file")"
+        fi
+        printf '%s\n' "$((count + 1))" > "$count_file"
+        if [ "$count" -eq 0 ]; then
+            printf '%s\n' '{"iid":12,"title":"Crash on startup","description":"Steps to reproduce","state":"opened","web_url":"https://gitlab.com/group/sub/project/-/issues/12","created_at":"2026-01-02T03:04:05.000Z","updated_at":"2026-01-03T04:05:06.000Z"}'
+        else
+            printf '%s\n' '{"iid":12,"title":"Crash on startup","description":"Steps to reproduce","state":"opened","web_url":"https://gitlab.com/group/sub/project/-/issues/12","created_at":"2026-01-02T03:04:05.000Z","updated_at":"2026-01-04T04:05:06.000Z"}'
+        fi
+        exit 0
+    fi
+    if [ "$WORKCTL_GLAB_MODE" = "description-updated" ]; then
+        printf '%s\n' '{"iid":12,"title":"Updated title","description":"Replacement\nwith exact bytes\n","state":"opened","web_url":"https://gitlab.com/group/sub/project/-/issues/12","created_at":"2026-01-02T03:04:05.000Z","updated_at":"2026-01-04T04:05:06.000Z"}'
+    elif [ "$7" = "21" ]; then
         printf '%s\n' '{"iid":21,"title":"Created issue","description":"Created description","state":"opened","web_url":"https://gitlab.com/group/sub/project/-/issues/21","created_at":"2026-01-02T03:04:05.000Z","updated_at":"2026-01-03T04:05:06.000Z"}'
     else
         printf '%s\n' '{"iid":12,"title":"Crash on startup","description":"Steps to reproduce","state":"opened","web_url":"https://gitlab.com/group/sub/project/-/issues/12","created_at":"2026-01-02T03:04:05.000Z","updated_at":"2026-01-03T04:05:06.000Z"}'

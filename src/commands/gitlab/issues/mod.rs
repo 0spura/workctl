@@ -1,6 +1,8 @@
 mod create;
 mod list;
+mod note;
 mod shared;
+mod state;
 mod update;
 mod view;
 
@@ -15,6 +17,13 @@ pub(super) fn execute(globals: &GlobalArgs, args: IssueArgs) -> Result<(), AppEr
         IssueAction::List(args) => list::execute(globals, &args)?,
         IssueAction::View(args) => view::execute(globals, args)?,
         IssueAction::Update(args) => update::execute(globals, args)?,
+        IssueAction::Close(args) => state::execute(globals, args, state::Operation::Close)?,
+        IssueAction::Reopen(args) => state::execute(globals, args, state::Operation::Reopen)?,
+        IssueAction::Subscribe(args) => state::execute(globals, args, state::Operation::Subscribe)?,
+        IssueAction::Unsubscribe(args) => {
+            state::execute(globals, args, state::Operation::Unsubscribe)?
+        }
+        IssueAction::Note(args) => note::execute(globals, args)?,
     };
     output::write(globals.format, &output)
 }

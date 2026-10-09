@@ -171,7 +171,7 @@ fn drain<R: Read>(mut reader: R, capture: bool) -> Result<(Vec<u8>, bool), Proce
 mod tests {
     use std::time::{Duration, Instant};
 
-    use super::{run_with_deadline, ProcessError, MAX_CAPTURE_BYTES};
+    use super::{MAX_CAPTURE_BYTES, ProcessError, run_with_deadline};
 
     #[test]
     fn terminates_a_child_at_the_deadline() {

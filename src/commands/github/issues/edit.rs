@@ -7,7 +7,8 @@ use crate::providers::{IssuePatch, WorkItemProvider, resolve_body_change};
 
 use crate::commands::support;
 
-use super::shared::{AUTO_LABEL_THRESHOLD, automatic_label_names, filter_label_catalog};
+use super::shared::filter_label_catalog;
+use crate::commands::labels::{AUTO_LABEL_THRESHOLD, automatic_label_names};
 
 pub(super) fn execute(globals: &GlobalArgs, args: EditArgs) -> Result<SuccessOutput, AppError> {
     let url_repo = args
@@ -15,9 +16,12 @@ pub(super) fn execute(globals: &GlobalArgs, args: EditArgs) -> Result<SuccessOut
         .iter()
         .find_map(|target| target.repo.as_deref());
     let provider_hint = globals
-        .provider
+        .work_item_provider
         .or_else(|| url_repo.map(|_| crate::config::Provider::Github));
-    let repo = support::resolve_repo(provider_hint, globals.repo.as_deref().or(url_repo))?;
+    let repo = support::resolve_repo(
+        provider_hint.or(globals.work_item_provider),
+        globals.repo.as_deref().or(url_repo),
+    )?;
     let mut numbers = Vec::with_capacity(args.targets.len());
     for target in &args.targets {
         if target

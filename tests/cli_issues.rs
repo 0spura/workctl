@@ -1704,8 +1704,7 @@ fn issue_lifecycle_comments_and_conversation_lock_use_gh_native_commands() {
     );
     assert_eq!(success_json(&duplicate)["state"], "closed");
 
-    let reopened =
-        fixture.run_issue(&["issue", "reopen", "12", "--comment", "Reopened"], "");
+    let reopened = fixture.run_issue(&["issue", "reopen", "12", "--comment", "Reopened"], "");
     assert_eq!(success_json(&reopened)["state"], "open");
 
     let comment = fixture.run_issue(&["issue", "comment", "12", "--body", "Comment body"], "");

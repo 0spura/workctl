@@ -58,7 +58,6 @@ impl DecisionAdapter for laya_adapter::LayaAdapter {
     }
 }
 
-
 impl DecisionAdapter for glide_adapter::GLiDeRAdapter {
     fn suggest(
         config: AdapterConfig<'_>,
@@ -119,11 +118,9 @@ impl DecisionModel {
             return Err(AppError::decision_input_limit());
         }
         let mut names = std::collections::HashSet::with_capacity(input.candidates.len());
-        if input
-            .candidates
-            .iter()
-            .any(|candidate| candidate.name.trim().is_empty() || !names.insert(candidate.name.as_str()))
-        {
+        if input.candidates.iter().any(|candidate| {
+            candidate.name.trim().is_empty() || !names.insert(candidate.name.as_str())
+        }) {
             return Err(AppError::invalid_input(
                 "decision candidates must have distinct nonblank names",
             ));

@@ -1,5 +1,5 @@
-use crate::cli::github::prs::ReopenArgs;
 use crate::cli::GlobalArgs;
+use crate::cli::github::prs::ReopenArgs;
 use crate::domain::AppError;
 use crate::output::SuccessOutput;
 use crate::providers::PullRequestProvider;

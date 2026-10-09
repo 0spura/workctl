@@ -1,15 +1,12 @@
 pub mod issues;
+pub mod merge_requests;
 
 use crate::domain::AppError;
 use crate::process::runner::{self, ProcessError};
 
-/// The only GitLab host this build resolves, so every invocation pins it explicitly.
-pub(super) const HOST: &str = "gitlab.com";
-
-/// The repository argument `glab` receives: a full URL, so the host never depends on the
-/// directory `workctl` happens to run in.
-pub(super) fn repo_argument(repo: &str) -> String {
-    format!("https://{HOST}/{repo}")
+/// `glab` receives a full project URL, so it never infers a host from the working directory.
+pub(super) fn repo_argument(repo_url: &str) -> String {
+    repo_url.to_owned()
 }
 
 /// Runs `glab`, optionally sending text through stdin, and maps process failures onto the shared
@@ -46,8 +43,8 @@ pub(super) fn run_glab_mutation(
     Ok(output.stdout)
 }
 
-pub(super) fn authenticate() -> Result<(), AppError> {
-    let args = ["auth", "status", "--hostname", HOST].map(str::to_owned);
+pub(super) fn authenticate(host: &str) -> Result<(), AppError> {
+    let args = ["auth", "status", "--hostname", host].map(str::to_owned);
     let output = runner::run("glab", &args, None, None).map_err(map_process_error)?;
     if output.success {
         Ok(())

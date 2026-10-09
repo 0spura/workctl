@@ -1,3 +1,4 @@
+use crate::domain::RepositoryLabel;
 use serde::Deserialize;
 
 use crate::domain::{AppError, Issue, IssueState, IssueSummary};
@@ -14,6 +15,30 @@ struct ApiIssue {
     web_url: String,
     created_at: String,
     updated_at: String,
+}
+
+#[derive(Deserialize)]
+struct ApiLabel {
+    name: String,
+    description: Option<String>,
+}
+
+pub fn labels(bytes: &[u8]) -> Result<Vec<RepositoryLabel>, AppError> {
+    let responses: Vec<ApiLabel> =
+        serde_json::from_slice(bytes).map_err(|_| AppError::provider_response())?;
+    let mut names = std::collections::HashSet::with_capacity(responses.len());
+    responses
+        .into_iter()
+        .map(|label| {
+            if label.name.trim().is_empty() || !names.insert(label.name.clone()) {
+                return Err(AppError::provider_response());
+            }
+            Ok(RepositoryLabel {
+                name: label.name,
+                description: label.description.filter(|value| !value.trim().is_empty()),
+            })
+        })
+        .collect()
 }
 
 pub fn issue(bytes: &[u8]) -> Result<Issue, AppError> {
@@ -73,7 +98,7 @@ fn parse_state(value: &str) -> Result<IssueState, AppError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{issue, issue_summaries, parse_state};
+    use super::{issue, issue_summaries, labels, parse_state};
 
     const OPEN_ISSUE: &str = r#"{
         "iid": 12,
@@ -126,5 +151,22 @@ mod tests {
             summaries[0].state,
             crate::domain::IssueState::Open
         ));
+    }
+
+    #[test]
+    fn maps_native_label_catalog_and_rejects_duplicate_names() {
+        let catalog = labels(
+            br#"[{"name":"bug","description":"Broken behavior"},{"name":"docs","description":null}]"#,
+        )
+        .expect("valid labels");
+        assert_eq!(catalog[0].name, "bug");
+        assert_eq!(catalog[0].description.as_deref(), Some("Broken behavior"));
+        assert_eq!(catalog[1].description, None);
+        assert_eq!(
+            labels(br#"[{"name":"bug"},{"name":"bug"}]"#)
+                .unwrap_err()
+                .code,
+            "provider_response"
+        );
     }
 }

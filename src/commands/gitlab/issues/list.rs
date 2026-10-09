@@ -2,7 +2,7 @@ use crate::cli::GlobalArgs;
 use crate::cli::gitlab::issues::ListArgs;
 use crate::domain::AppError;
 use crate::output::SuccessOutput;
-use crate::providers::IssueQuery;
+use crate::providers::gitlab::issues::GitLabIssueQuery;
 
 use super::shared;
 
@@ -11,24 +11,26 @@ pub(super) fn execute(globals: &GlobalArgs, args: &ListArgs) -> Result<SuccessOu
     Ok(SuccessOutput::Issues(provider.list(&query(args))?))
 }
 
-/// Every set field maps to one `glab issue list` filter.
-fn query(args: &ListArgs) -> IssueQuery {
-    let state = if args.all {
-        "all"
-    } else if args.closed {
-        "closed"
-    } else {
-        "open"
-    };
-    IssueQuery {
-        state: state.to_owned(),
-        limit: args.per_page,
+/// Every set field maps to one documented `glab issue list` filter.
+fn query(args: &ListArgs) -> GitLabIssueQuery {
+    GitLabIssueQuery {
+        all: args.all,
+        closed: args.closed,
         labels: args.labels.clone(),
         assignee: args.assignee.clone(),
         author: args.author.clone(),
-        mention: None,
         milestone: args.milestone.clone(),
         search: args.search.clone(),
-        issue_type: None,
+        in_fields: args.in_fields.clone(),
+        confidential: args.confidential,
+        issue_type: args.issue_type.clone(),
+        iteration: args.iteration.clone(),
+        not_assignees: args.not_assignees.clone(),
+        not_authors: args.not_authors.clone(),
+        not_labels: args.not_labels.clone(),
+        order: args.order.clone(),
+        sort: args.sort.clone(),
+        page: args.page,
+        per_page: args.per_page,
     }
 }

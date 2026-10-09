@@ -7,7 +7,8 @@ use crate::providers::{NewIssue, WorkItemProvider};
 
 use crate::commands::support;
 
-use super::shared::{AUTO_LABEL_THRESHOLD, automatic_label_names, filter_label_catalog};
+use super::shared::filter_label_catalog;
+use crate::commands::labels::{AUTO_LABEL_THRESHOLD, automatic_label_names};
 
 pub(super) fn execute(globals: &GlobalArgs, args: CreateArgs) -> Result<SuccessOutput, AppError> {
     let body = support::optional_text(
@@ -19,7 +20,7 @@ pub(super) fn execute(globals: &GlobalArgs, args: CreateArgs) -> Result<SuccessO
     let mut explicit_labels = args.labels;
     let automatic = explicit_labels.iter().any(|label| label == "@auto");
     explicit_labels.retain(|label| label != "@auto");
-    let repo = support::resolve_repo(globals.provider, globals.repo.as_deref())?;
+    let repo = support::resolve_repo(globals.work_item_provider, globals.repo.as_deref())?;
     let defaults = support::github_issue_defaults(&repo)?;
     let mut assignees = args.assignees;
     if assignees.is_empty() {

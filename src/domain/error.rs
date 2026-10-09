@@ -21,8 +21,7 @@ impl AppError {
     ) -> Self {
         Self {
             code: "partial_success",
-            message:
-                "the operation completed partially; inspect the reported resource before retrying",
+            message: "the operation completed partially; inspect the reported resource before retrying",
             details: Some(serde_json::json!({
                 "resource": resource,
                 "completed": completed,
@@ -50,20 +49,13 @@ impl AppError {
         )
     }
 
-    pub const fn provider_mismatch() -> Self {
-        Self::new(
-            "provider_unsupported",
-            "the Git origin remote belongs to another provider; pass --repo",
-        )
-    }
-
     pub const fn gitlab_authentication() -> Self {
         Self::new("authentication", "GitLab CLI authentication is required")
     }
     pub const fn gitlab_write_uncertain() -> Self {
         Self::new(
             "gitlab_write_uncertain",
-            "the GitLab write may have succeeded but its result could not be confirmed; check the issue before retrying",
+            "the GitLab write may have succeeded but its result could not be confirmed; check the remote resource before retrying",
         )
     }
 

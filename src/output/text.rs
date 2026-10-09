@@ -158,6 +158,16 @@ fn write_to(stdout: &mut impl Write, output: &SuccessOutput) -> Result<(), AppEr
         SuccessOutput::Checkout { number } => {
             writeln!(stdout, "pr #{number} checked out").map_err(|_| AppError::output())?;
         }
+        SuccessOutput::GitLabAction { number, action } => {
+            write!(stdout, "merge request !{number} ").map_err(|_| AppError::output())?;
+            write_safe(stdout, action, false)?;
+            writeln!(stdout).map_err(|_| AppError::output())?;
+        }
+        SuccessOutput::ProviderData(value) => {
+            let json = serde_json::to_string(value).map_err(|_| AppError::output())?;
+            write_safe(stdout, &json, false)?;
+            writeln!(stdout).map_err(|_| AppError::output())?;
+        }
     }
     Ok(())
 }
@@ -346,7 +356,7 @@ fn pr_state(state: crate::domain::PullRequestState) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{write_to, SuccessOutput};
+    use super::{SuccessOutput, write_to};
     use crate::domain::{Issue, IssueState, IssueSummary};
 
     #[test]

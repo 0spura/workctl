@@ -120,15 +120,17 @@ fn decode(bytes: Vec<u8>) -> Result<String, AppError> {
     String::from_utf8(bytes).map_err(|_| AppError::invalid_input("body text must be valid UTF-8"))
 }
 
-/// Resolves the repository selected by the provider flags and the current directory.
+/// Resolves repository scope for the selected command's provider domain.
 pub(super) fn resolve_repo(
-    explicit_provider: Option<Provider>,
+    provider: Option<Provider>,
     explicit_repo: Option<&str>,
 ) -> Result<String, AppError> {
     let cwd = std::env::current_dir()
         .map_err(|_| AppError::context("could not determine the current directory"))?;
-    let context = config::resolve_context(explicit_provider, explicit_repo, Path::new(&cwd))?;
-    Ok(context.repo)
+    let provider = provider.ok_or(AppError::context(
+        "could not determine a provider; specify --provider",
+    ))?;
+    config::resolve_domain_context(provider, explicit_repo, Path::new(&cwd))
 }
 pub(super) fn github_issue_defaults(
     repo: &str,

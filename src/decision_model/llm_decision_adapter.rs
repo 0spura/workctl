@@ -52,10 +52,7 @@ struct Scores {
 pub struct LLMDecisionAdapter;
 
 impl LLMDecisionAdapter {
-    pub fn suggest(
-        model: &str,
-        input: DecisionInput<'_>,
-    ) -> Result<Vec<DecisionScore>, AppError> {
+    pub fn suggest(model: &str, input: DecisionInput<'_>) -> Result<Vec<DecisionScore>, AppError> {
         let url = local_url("/chat/completions", DEFAULT_URL)?;
         let labels = input
             .candidates

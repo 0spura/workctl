@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-use crate::cli::github::prs::ChecksArgs;
 use crate::cli::GlobalArgs;
+use crate::cli::github::prs::ChecksArgs;
 use crate::domain::AppError;
 use crate::output::SuccessOutput;
 use crate::providers::{PrChecksOptions, PullRequestProvider};

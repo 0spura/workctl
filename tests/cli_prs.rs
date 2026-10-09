@@ -5,7 +5,7 @@ mod common;
 use std::fs;
 use std::process::Command;
 
-use common::{error_json, success_json, Fixture};
+use common::{Fixture, error_json, success_json};
 use serde_json::json;
 
 /// Exact `gh` argv lines in invocation order, so assertions cannot match a prefix of a longer
@@ -249,10 +249,12 @@ fn checks_parse_failing_reports_and_treat_missing_checks_as_empty() {
         &"pr checks 42 --repo owner/repo --required --json name,state,bucket,description,link,workflow"
             .to_string()
     ));
-    assert!(lines.contains(
-        &"pr checks 42 --repo owner/repo --json name,state,bucket,description,link,workflow"
-            .to_string()
-    ));
+    assert!(
+        lines.contains(
+            &"pr checks 42 --repo owner/repo --json name,state,bucket,description,link,workflow"
+                .to_string()
+        )
+    );
 }
 
 // RF-PR.14: Check watching forwards native controls, preserves failure evidence, and times out boundedly.
@@ -369,9 +371,11 @@ fn status_keeps_empty_checks_inconclusive_and_stops_for_non_pull_requests() {
     let missing = missing_fixture.run_pr(&["pr", "status", "42"], "pr-view-failure");
     assert_eq!(error_json(&missing)["code"], "not_pull_request");
     assert!(missing.stdout.is_empty());
-    assert!(!gh_lines(&missing_fixture)
-        .iter()
-        .any(|line| line.starts_with("pr checks 42 ")));
+    assert!(
+        !gh_lines(&missing_fixture)
+            .iter()
+            .any(|line| line.starts_with("pr checks 42 "))
+    );
 }
 
 #[test]
@@ -522,12 +526,16 @@ fn checkout_switches_to_the_pr_branch_without_force_and_reports_safe_failure() {
             .expect("run local git fixture")
     };
     assert!(run_git(&["init", "-q"]).status.success());
-    assert!(run_git(&["config", "user.name", "Fixture"])
-        .status
-        .success());
-    assert!(run_git(&["config", "user.email", "fixture@example.test"])
-        .status
-        .success());
+    assert!(
+        run_git(&["config", "user.name", "Fixture"])
+            .status
+            .success()
+    );
+    assert!(
+        run_git(&["config", "user.email", "fixture@example.test"])
+            .status
+            .success()
+    );
     fs::write(fixture.root.join("seed.txt"), "seed").expect("write initial fixture file");
     assert!(run_git(&["add", "seed.txt"]).status.success());
     assert!(run_git(&["commit", "-qm", "initial"]).status.success());
@@ -541,9 +549,11 @@ fn checkout_switches_to_the_pr_branch_without_force_and_reports_safe_failure() {
         "pr-42"
     );
     assert!(gh_lines(&fixture).contains(&"pr checkout 42 --repo owner/repo".to_string()));
-    assert!(!gh_lines(&fixture)
-        .iter()
-        .any(|line| line.contains("--force")));
+    assert!(
+        !gh_lines(&fixture)
+            .iter()
+            .any(|line| line.contains("--force"))
+    );
 
     let text = fixture.run_pr(&["pr", "checkout", "43", "--format", "text"], "");
     assert_eq!(
@@ -560,9 +570,11 @@ fn checkout_switches_to_the_pr_branch_without_force_and_reports_safe_failure() {
 
     let force = fixture.run_pr(&["pr", "checkout", "42", "--force"], "");
     assert_eq!(force.status.code(), Some(2));
-    assert!(!gh_lines(&fixture)
-        .iter()
-        .any(|line| line.contains("--force")));
+    assert!(
+        !gh_lines(&fixture)
+            .iter()
+            .any(|line| line.contains("--force"))
+    );
 }
 
 #[test]
@@ -626,8 +638,10 @@ fn review_merge_ready_close_and_reopen_use_the_gh_commands() {
     let lines = gh_lines(&fixture);
     assert!(lines.contains(&"pr review 42 --repo owner/repo --approve --body-file -".to_string()));
     assert!(lines.contains(&"pr review 42 --repo owner/repo --request-changes".to_string()));
-    assert!(lines
-        .contains(&"pr merge 42 --repo owner/repo --squash --delete-branch --auto".to_string()));
+    assert!(
+        lines
+            .contains(&"pr merge 42 --repo owner/repo --squash --delete-branch --auto".to_string())
+    );
     assert!(lines.contains(&"pr ready 42 --repo owner/repo".to_string()));
     assert!(lines.contains(&"pr ready 42 --repo owner/repo --undo".to_string()));
     assert!(lines.contains(&"pr close 42 --repo owner/repo -c bye --delete-branch".to_string()));
@@ -638,12 +652,14 @@ fn review_merge_ready_close_and_reopen_use_the_gh_commands() {
 #[test]
 fn merge_uses_configured_method_and_boolean_branch_default() {
     let fixture = Fixture::new();
-    assert!(Command::new("git")
-        .args(["init", "-q"])
-        .current_dir(&fixture.root)
-        .status()
-        .expect("initialize config test repository")
-        .success());
+    assert!(
+        Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&fixture.root)
+            .status()
+            .expect("initialize config test repository")
+            .success()
+    );
     fs::write(
         fixture.root.join(".workctl.json"),
         r#"{"defaults":{"github":{"pr":{"mergeMethod":"squash","deleteBranch":false}}}}"#,
@@ -667,8 +683,10 @@ fn merge_uses_configured_method_and_boolean_branch_default() {
         success_json(&overridden),
         json!({"number":42,"method":"rebase","auto":false})
     );
-    assert!(gh_lines(&fixture)
-        .contains(&"pr merge 42 --repo owner/repo --rebase --delete-branch".to_string()));
+    assert!(
+        gh_lines(&fixture)
+            .contains(&"pr merge 42 --repo owner/repo --rebase --delete-branch".to_string())
+    );
 
     fs::write(
         fixture.root.join(".workctl.json"),
@@ -723,12 +741,16 @@ fn pr_create_and_edit_resolve_the_current_milestone_only_when_requested() {
         "milestone-nearest",
     );
     assert_eq!(success_json(&created)["number"], 42);
-    assert!(!gh_lines(&fixture)
-        .iter()
-        .any(|line| line.contains("milestones")));
-    assert!(!gh_lines(&fixture)
-        .iter()
-        .any(|line| line.contains("--milestone")));
+    assert!(
+        !gh_lines(&fixture)
+            .iter()
+            .any(|line| line.contains("milestones"))
+    );
+    assert!(
+        !gh_lines(&fixture)
+            .iter()
+            .any(|line| line.contains("--milestone"))
+    );
 
     let current = Fixture::new();
     let created = current.run_pr(
@@ -783,9 +805,11 @@ fn pr_create_and_edit_resolve_the_current_milestone_only_when_requested() {
         "",
     );
     assert_eq!(error_json(&output)["code"], "invalid_input");
-    assert!(!gh_lines(&missing)
-        .iter()
-        .any(|line| line.starts_with("pr create")));
+    assert!(
+        !gh_lines(&missing)
+            .iter()
+            .any(|line| line.starts_with("pr create"))
+    );
 }
 
 #[test]
@@ -844,9 +868,7 @@ fn pr_comment_lock_and_revert_use_native_gh_commands() {
     assert!(log.contains("pr lock 42 --repo owner/repo --reason too_heated"));
     assert!(log.contains("pr unlock 42 --repo owner/repo"));
     assert!(
-        log.contains(
-            "pr revert 42 --repo owner/repo --title Revert feature --draft --body-file -"
-        )
+        log.contains("pr revert 42 --repo owner/repo --title Revert feature --draft --body-file -")
     );
 
     let invalid = fixture.run_pr(&["pr", "comment", "42"], "");

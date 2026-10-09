@@ -11,15 +11,17 @@ Actors: a developer or coding agent running `workctl` locally. Observable behavi
 **Priority:** Must Have | **Status:** Implemented | **Dependencies:** none
 
 - GitHub issue commands are `create|list|blockers|view|edit|close|reopen|comment|lock|unlock`; GitHub pull-request commands are `create|checkout|list|view|status|diff|checks|review|merge|edit|ready|close|reopen|comment|lock|unlock|revert|update-branch`.
-- The provider is resolved before the command grammar is parsed: `.workctl.json`/`.workctl.local.json` (`provider`, `workItemProvider`), then the Git origin host, with explicit `--provider` overriding both.
+- Provider selection is independent by command domain and happens before command grammar parsing. `issue` uses the work-item provider; `pr` and `mr` use the code-host provider.
+- `--code-provider` overrides the code-host provider and `--work-item-provider` overrides the work-item provider. Legacy `--provider` applies to both domains unless the corresponding domain-specific flag is present.
+- For each domain, precedence is domain-specific CLI flag > legacy `--provider` > domain-specific configuration > legacy `provider` configuration > known Git origin host. Unsupported providers fail closed.
 - Each provider owns a static grammar. Native operations mirror that provider's CLI, with GitHub-only read diagnostics `blockers`; another provider's verb or flag is a usage error rather than a runtime rejection.
-- Top-level `--help` is provider-neutral and states the resolution order; a subcommand's help reflects the resolved provider's grammar.
-- `--repo OWNER/REPO`, `--provider`, and `--format json|text` are global overrides accepted before or after the group.
-- Help and version work without `git` or `gh` installed.
+- Top-level `--help` is provider-neutral and states the resolution order; a subcommand's help reflects its resolved domain provider's grammar.
+- `--repo OWNER/REPO`, `--provider`, `--code-provider`, `--work-item-provider`, and `--format json|text` are global overrides accepted before or after the group. `--repo` supplies scope to the selected command only.
+- Help and version work without `git`, `gh`, or `glab` installed.
 - Every flag carries a help description, and each subcommand prints usage examples for behavior a caller cannot infer from flag names — for `issue edit` and `pr edit`, the body-change set and exact-match patch contract; for `pr list`, filter composition; for `pr merge`, when an explicit method is required; for `pr status`, the review/mergeability/required-check evidence it reports; for `pr update-branch`, default merge-commit versus explicit rebase behavior; for `pr checks --watch`, bounded waiting; and for `pr checkout`, its current-worktree effect and absence of forced checkout.
 - There is no delete command for issues or pull requests in v0.
 
-**Acceptance:** In the GitHub grammar, `workctl issue --help` lists exactly ten supported issue subcommands and `workctl pr --help` lists exactly eighteen supported pull request subcommands; invoking an unknown command produces a structured JSON error on stderr and a nonzero exit. A verb or flag belonging to another provider's grammar is rejected as a usage error. No flag in any subcommand help is printed without a description, and `workctl issue edit --help` documents the `patch_conflict` failure and exact-context matching.
+**Acceptance:** With GitHub selected for both domains, `workctl issue --help` lists exactly ten supported issue subcommands and `workctl pr --help` lists exactly eighteen supported pull-request subcommands. With GitLab selected for code and GitHub for work items, root help exposes GitHub `issue` and GitLab `mr`, and each command executes through its owning provider. An unknown command produces a structured JSON error on stderr and a nonzero exit; unsupported provider verbs/flags are usage errors. Unsupported provider configuration fails before provider access. No flag in subcommand help is printed without a description, and `workctl issue edit --help` documents `patch_conflict` and exact-context matching.
 **Verification:** CLI integration test.
 
 ### RF-WI.1: Create an issue
@@ -409,27 +411,55 @@ Edit regressions `project_auto_edit_selects_only_requested_fields_and_preserves_
 **Verification:** `tests/cli_prs.rs` covers flag and stdin forwarding, both reported numbers, and safe provider failure.
 
 ### RF-GL.1: GitLab provider and grammar
-**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.2
+**Priority:** Must Have | **Status:** In Progress | **Dependencies:** RF-CFG.2
 
-- Selecting GitLab (explicit `--provider gitlab`, `provider`/`workItemProvider`, or a `gitlab.com` origin) activates the GitLab grammar in place of the GitHub grammar.
-- The GitLab grammar mirrors the `glab` CLI. Its `issue` group provides `create`, `list`, `view`, and `update`, using GitLab flag names; the `mr` group remains a later slice.
-- GitHub-only verbs and flags (`edit`, `--body`, `--state`, `--limit`) are usage errors raised before any provider call. `pr` is also a usage error whose message names `mr`.
-- Each valid GitLab operation authenticates with `glab auth status --hostname gitlab.com` before invoking the operation; local syntax/field validation completes first. The project reaches `glab` as a full `https://gitlab.com/GROUP[/SUBGROUP]/PROJECT` URL so the host never depends on the working directory.
+- GitLab-specific host capabilities are limited to the native issue and merge-request grammar; interactive `glab issue board view` and destructive `glab issue delete` remain excluded.
+- GitLab issue grammar exposes create/list/view/update/close/reopen/note/subscribe/unsubscribe. Native issue create/update fields include confidentiality, due date, epic, linked issues/MRs, time estimate/spent, weight, and templates; only provider-supported fields are valid, and destructive/interactive operations require explicit safe contracts.
+- The GitLab `mr` grammar exposes list/view/diff/checkout/close/reopen/approve/revoke/rebase/subscribe/unsubscribe/todo/merge/note create/list/update/resolve/reopen/create/update/approvers/issues. Remaining `glab mr` commands are `for` (deprecated alias for `create --related-issue`) and destructive `delete`; delete is excluded absent a safe confirmation contract.
+- GitLab-only issue filters and metadata (confidentiality, weight, due date, epics, iterations, linking) stay provider-specific. Unsupported GitHub capabilities are never fabricated from missing GitLab data.
+- `glab issue list --group` is excluded because the selected repository grammar is project-scoped; `--epic` requires a group context and does not paginate, so it is not mapped onto a project list. These group-level queries need an explicit group-target CLI contract rather than inference from the selected project.
+- Each valid GitLab operation authenticates with `glab auth status --hostname` using the selected project host before invoking the operation; local syntax/field validation completes first. The project reaches `glab` as a full HTTPS project URL, so the host never depends on the working directory.
+
 - A missing or unauthenticated `glab` maps to `dependency` and `authentication`; no provider stderr reaches the user.
 
-**Acceptance:** In a GitLab-configured root, `workctl issue --help` lists exactly the GitLab issue verbs, `workctl issue edit 1` and `workctl issue list --limit 5` are usage errors, `workctl pr list` fails with an error naming `mr`, and a missing `glab` produces the safe dependency error rather than a provider diagnostic.
-**Verification:** CLI integration tests `tests/cli_gitlab.rs`; a manual run with `glab` absent for the dependency path.
+**Acceptance:** In a GitLab-configured root, `workctl issue --help` and `workctl mr --help` list only provider-native verbs, GitHub-only flags fail before provider access, `workctl pr` fails naming `mr`, and missing `glab` produces a safe dependency error.
+**Verification:** CLI integration tests `tests/cli_gitlab.rs` and `tests/cli_gitlab_mr.rs`; a manual run with `glab` absent for the dependency path.
+
+### RF-GL.12: Native GitLab merge-request actions
+**Priority:** Must Have | **Status:** In Progress | **Dependencies:** RF-GL.1
+
+- `mr approve`, `mr revoke`, `mr rebase`, `mr subscribe`, `mr unsubscribe`, and `mr todo` invoke the matching native `glab mr` action with the merge request IID and selected project URL.
+- `mr merge IID` forwards GitLab-native `--auto-merge[=true|false]`, `--message`, `--rebase`, `--remove-source-branch[=true|false]`, `--sha`, `--squash`, `--squash-message`, and `--yes` only when specified. Omitting the optional booleans leaves `glab`/project defaults intact. It returns `{ "number", "action" }`, with `action` equal to `merged` or `merge queued`.
+- The action commands return `{ "number", "action" }`; text output identifies the merge request and action. They do not imitate GitHub review, branch-update, or comment contracts.
+- Unsupported operation names fail closed in the provider adapter; provider errors are sanitized and never emit success output.
+
+**Acceptance:** Each action reaches its native `glab` verb with the selected IID and repository. Merge forwards only specified options and reports queued versus immediate merge correctly. Provider failure emits no success output.
+**Verification:** `tests/cli_gitlab_mr.rs` covers six native actions, merge-option forwarding (including explicit false booleans), and sanitized mutation failure.
+
+
+
+### RF-GL.13: Create a GitLab merge-request discussion
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-GL.1
+
+- `mr note create IID --message TEXT` creates a native discussion through `glab mr note create IID --repo PROJECT`, with the message passed on stdin rather than in process arguments.
+- `mr note resolve DISCUSSION IID` and `mr note reopen DISCUSSION IID` invoke the native note subcommands. IDs accept a positive numeric note ID or a hexadecimal discussion ID/prefix of at least eight characters.
+- A blank message is rejected during CLI parsing before provider access. Successful outputs identify the GitLab merge request and report `note added`, `discussion resolved`, or `discussion reopened`.
+- Native `--reply`, `--file`, `--line`, `--old-line`, `--resolvable`, and `--unique` remain provider-specific. `--line`/`--old-line` require `--file`; the two line-side flags conflict; `--resolvable=false` conflicts with `--file` and `--reply`; discussion reply/file/unique targets are mutually exclusive.
+- Provider failure returns a sanitized error and no success output; the write is never retried automatically.
+
+**Acceptance:** The native command receives the selected IID and repository, exact message bytes arrive on stdin, message text is absent from process arguments, native options pass through, and invalid option combinations fail before authentication/provider access.
+**Verification:** `tests/cli_gitlab_mr.rs` covers stdin/argument separation, native diff-note flags, pre-authentication conflict rejection, and resolve/reopen argument ordering.
+
 
 ### RF-GL.2: List GitLab issues
 **Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-GL.1
 
-- `issue list` returns bounded issue summaries for the GitLab project, mapping `--closed`, `--all`, `--label`, `--assignee`, `--author`, `--milestone`, `--search`, and `--per-page` to the `glab` filters of the same name. `--all` and `--closed` are mutually exclusive; `--per-page` accepts 1 to 100, the provider's page ceiling.
-- Each summary carries the issue number (the GitLab IID), title, normalized `open|closed` state, URL, and `updated_at`, and omits the description.
+- `issue list` returns one bounded page of issue summaries for the GitLab project, forwarding native filters `--closed`, `--all`, `--label`, `--assignee`, `--author`, `--milestone`, `--search`, `--in`, `--confidential`, `--issue-type`, `--iteration`, `--not-assignee`, `--not-author`, `--not-label`, `--order`, `--sort`, `--page`, and `--per-page`. `--all` and `--closed` are both passed when supplied; `--per-page` accepts 1 to 100.
 - The result never includes merge requests.
 - Errors: `invalid_input` for a blank filter value or a `--per-page` outside its range; `gitlab_cli` when the `glab issue list` call fails; `provider_response` for a malformed page.
 
 **Acceptance:** Supplied filters appear in the `glab` invocation; the output contains only issues, omits the body, and honors `--per-page`; an invalid `--per-page` fails before `glab` runs.
-**Verification:** Integration tests `gitlab_list_forwards_every_filter_to_glab`, `gitlab_state_flags_select_the_requested_state`, and `gitlab_grammar_rejects_github_flags_and_conflicts`.
+**Verification:** `tests/cli_gitlab.rs` covers native filters, state combinations, output mapping, invalid page limits, and provider-specific grammar.
 
 ### RF-GL.3: View a GitLab issue
 **Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-GL.1
@@ -443,49 +473,113 @@ Edit regressions `project_auto_edit_selects_only_requested_fields_and_preserves_
 
 ### RF-GL.4: Create a GitLab issue
 **Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-GL.1
-
-- `issue create` requires a nonblank `--title` and an explicitly supplied `--description` or `--description-file`; it never prompts. Description data is passed as UTF-8 on `glab` stdin, never in argv; a description consisting only of `-` is rejected because `glab` reserves it for editor behavior.
-- Native optional fields are `--label` (repeatable), `--assignee` (repeatable plain usernames), `--milestone`, `--confidential`, `--weight` (including zero), and `--due-date` (valid `YYYY-MM-DD`). Because `glab issue create --weight=0` omits the zero value, `workctl` explicitly follows creation with `glab issue update --weight=0` when requested.
+- `issue create` requires a nonblank `--title` and an explicitly supplied `--description` or `--description-file`; it never prompts. `glab issue create` receives an empty native `--description=` to suppress editor behavior; the actual description is patched through documented `glab api --input -` JSON-body mode, never argv. A description equal to `-` is ordinary user data.
+- Native optional fields are `--label` (repeatable), `--assignee` (repeatable plain usernames), `--milestone`, `--confidential`, `--weight` (including zero), `--due-date` (valid `YYYY-MM-DD`), `--epic` (positive epic ID), `--linked-issues` (repeatable/comma-separated IIDs), `--link-type` (`relates_to`), `--linked-mr` (positive IID), `--time-estimate`, `--time-spent`, and local `--template`. These remain GitLab-specific.
 - On success, the CLI validates the created issue URL against the selected project, reads the created IID through `glab issue view`, and returns the shared `Issue`.
 - A provider write or post-write confirmation failure returns `gitlab_write_uncertain`; raw provider diagnostics are withheld.
 
-**Acceptance:** A fixture observes the documented native arguments and exact stdin bytes; successful create returns the read-back issue; failed or unconfirmable creates do not leak provider output.
+**Acceptance:** A fixture observes documented `glab issue` arguments—including GitLab-only epic, link, time, and template fields—the exact JSON description sent on `glab api` stdin, and the read-back issue; invalid epic/link IIDs fail before provider access. Failed or unconfirmable writes do not leak provider output.
 **Verification:** Integration tests `rf_gl_4_gitlab_create_uses_native_flags_and_stdin_description` and `gitlab_write_uncertainty_hides_diagnostics_and_rejects_untrusted_create_url`.
 
 ### RF-GL.5: Update a GitLab issue
 **Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-GL.1
 
 - `issue update NUMBER` accepts any nonempty combination of `--title`, `--description`/`--description-file`, `--label`, `--unlabel`, `--assignee`, `--unassign`, `--milestone`, `--confidential`/`--public`, `--weight`, and `--due-date`; an empty update fails before provider access.
-- Description input is sent as UTF-8 stdin, not argv. Empty descriptions are rejected because `glab issue update` does not clear the description with an empty value.
+- Description input is sent as UTF-8 stdin through `glab api --input -`, never argv. Empty descriptions remain rejected because this CLI's native update contract does not accept an empty description value.
 - Milestone empty string or `0` clears the milestone; weight zero is preserved on update; assignee +/-/! prefixes use GitLab's relative assignment semantics.
 - A successful write is followed by `glab issue view` and returns the shared `Issue`. A failed write or read-back returns `gitlab_write_uncertain` with no raw diagnostics.
 
-**Acceptance:** Fixture assertions cover native mutation semantics, exact description bytes, read-back, empty-update rejection before `glab`, and safe errors after an uncertain write.
+**Acceptance:** Fixture assertions cover native metadata semantics, exact JSON description body on stdin, read-back, empty-update rejection before `glab`, and safe errors after an uncertain write.
 **Verification:** Integration tests `rf_gl_5_gitlab_update_uses_native_flags_and_reads_back_the_issue` and `gitlab_writes_reject_empty_or_invalid_changes_before_authentication`.
+
+### RF-GL.6: Automatic GitLab issue labels
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-GL.4, RF-GL.5, RF-CFG.2
+
+- `issue create` and `issue update NUMBER` opt into classification with `--label @auto`. Manual labels remain additive; `@auto` is consumed by `workctl` and is never sent to `glab`. `--unlabel @auto` is rejected before provider access.
+- The DecisionModel configuration is validated before any `glab` command. Without `@auto`, no model configuration lookup or label-catalog read occurs.
+- The candidate catalog comes from native `glab label list --output json`, paged at 100 labels and bounded to 1,000 total labels. Invalid or duplicate catalog entries fail closed. Only returned candidate labels scoring at least 0.8 are added.
+- Update classification receives the final title and description (explicit replacements or the fetched current text). The issue is fetched again after model inference; a changed `updated_at` returns `conflict` before mutation. If no label qualifies and no other update was requested, no write is issued.
+
+**Acceptance:** Isolated CLI tests cover native catalog paging, malformed/oversized catalog rejection, model threshold/manual-label combination, no sentinel forwarding, no catalog/model access without opt-in, missing credentials before `glab`, final update text, concurrent-change rejection, and `--unlabel @auto` rejection. No test writes to a live project.
+**Verification:** `tests/cli_gitlab.rs` RF-GL.6 cases, GitLab label-mapping tests, and a read-only `glab label list` smoke.
+
+
+### RF-GL.7: List and view GitLab merge requests
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-GL.1
+
+- GitLab's provider-selected grammar exposes `mr list` and `mr view`, never a `pr` alias. List filters use native `glab mr list` flags: state, draft, label/not-label, assignee, author, reviewer, milestone, source/target branch, search, created/deployed date, environment, order, sort, page, and per-page count.
+- List results use the shared pull-request summary with IID, state, draft status, URL, target/source branches, and update timestamp; descriptions are omitted.
+- View maps GitLab's `description`, `target_branch`, `source_branch`, `web_url`, and usernames into the shared pull-request record. GitHub-only mergeability and review-decision values remain null.
+- Invalid or zero IIDs fail before provider access. Malformed provider JSON fails closed as `provider_response`.
+
+**Acceptance:** `mr list` forwards native filters and omits descriptions; `mr view` normalizes GitLab state and maps native fields without inventing GitHub-only data; GitHub flags and verbs fail before `glab`.
+**Verification:** `tests/cli_gitlab_mr.rs`; read-only smoke against the authorized test project.
+
+### RF-GL.8: Close and reopen GitLab merge requests
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-GL.1
+
+- `mr close IID` and `mr reopen IID` invoke the corresponding native `glab mr` command after host authentication.
+- The commands return the IID and resulting state (`closed` or `open`) only after the provider reports success. Provider failure returns the safe `gitlab_write_uncertain` error.
+- A non-positive or malformed IID fails before authentication/provider access.
+
+**Acceptance:** Isolated CLI tests observe exact native `mr close`/`mr reopen` invocation and the resulting state; provider errors do not emit success output or diagnostics.
+**Verification:** `tests/cli_gitlab_mr.rs`.
+
+### RF-GL.9: Print a GitLab merge request diff
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-GL.1
+
+- `mr diff IID` delegates to native `glab mr diff IID --repo URL --color=never`; `--raw` is forwarded only when requested.
+- Output is `{ "number", "diff" }`; invalid IIDs fail before authentication, and malformed UTF-8 provider output fails as `provider_response`.
+- Provider stderr remains withheld under the shared GitLab error contract.
+
+**Acceptance:** The isolated CLI test observes the native diff invocation and proves the returned diff content is preserved.
+**Verification:** `tests/cli_gitlab_mr.rs`.
+
+### RF-GL.10: GitLab issue lifecycle, notes, and subscriptions
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-GL.1
+
+- `issue close` and `issue reopen` delegate to their native `glab issue` operations and report the resulting state only on success.
+- `issue subscribe` and `issue unsubscribe` delegate to the native notification commands and report the completed operation.
+- `issue note IID --message TEXT` creates a GitLab issue note. Since the native `glab issue note --message` interface has no stdin option, workctl uses the documented `glab api --input -` mode with the native issue-notes API path; note text is JSON on stdin, never a child-process argument.
+- Issue note messages must be nonblank; invalid IIDs and messages fail before authentication.
+- Provider mutation failures return a safe uncertain-write error; no provider diagnostics are emitted.
+
+**Acceptance:** Isolated tests verify native lifecycle/subscription command names, note endpoint and exact stdin JSON, safe output, and rejection of blank notes before provider access.
+**Verification:** `tests/cli_gitlab.rs`.
+
+### RF-GL.11: Check out a GitLab merge request
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-GL.1
+
+- `mr checkout IID` delegates to `glab mr checkout IID --repo URL` in the caller's current worktree.
+- Workctl never exposes or forwards `--force`, branch-name, detached-HEAD, or separate-worktree options; native `glab` applies its normal local-change protections.
+- Success returns `{ "number" }`; errors return a safe `gitlab_cli` result without partial success output.
+
+**Acceptance:** A CLI integration test proves the current local branch changes to the MR branch via native checkout, and the invocation omits force.
+**Verification:** `tests/cli_gitlab_mr.rs` uses a temporary Git repository and `glab` fixture.
 
 ### RF-CFG.1: Project configuration
 **Priority:** Must Have | **Status:** Implemented | **Dependencies:** none
 
 - Both optional files are discovered at the Git worktree root and validated on every command invocation, even when CLI flags override selected values. Local top-level fields, including the entire `defaults` object, replace the corresponding shared fields.
-- The strict schema contains `provider`, `workItemProvider`, and `defaults`; provider values are `github` or `gitlab`. Files must be regular, non-symlink files no larger than 64 KiB. Unknown keys and invalid JSON fail closed.
+- The strict schema contains legacy `provider`, independent `codeProvider` and `workItemProvider`, and `defaults`; code and work-item provider values are currently `github` or `gitlab`. `provider` remains a compatibility default for both domains; domain-specific fields override it. Linear is not yet a supported provider and must be rejected, never silently routed to GitHub or GitLab.
 - `.workctl.local.json` is gitignored. Old `.mcp-tracker*.json` files are not read or migrated.
-- No configuration file is required when the provider and repository can be resolved from flags or the Git remote.
+- No configuration file is required when providers and the command-specific repository can be resolved from flags or the Git origin.
 
-**Acceptance:** Local provider fields override shared fields; malformed, unknown, oversized, symlink, or non-regular configuration yields a safe JSON error even when flags provide the effective provider/repository; legacy filenames have no effect.
-**Verification:** Configuration unit tests using temporary Git roots.
+**Acceptance:** Shared and local provider settings merge independently by domain, while local values override matching shared values; `provider` is a fallback for both domains. Malformed, unknown, oversized, symlink, or non-regular configuration yields a safe JSON error even when flags override effective providers. Linear and unsupported provider names fail closed.
+**Verification:** Configuration unit tests using temporary Git roots, including independent code/work-item overrides and legacy fallback.
 
 ### RF-CFG.2: Provider and repository resolution
 **Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.1
 
-- Provider precedence: explicit `--provider` > `workItemProvider` > `provider` > known Git remote host.
-- Provider resolution runs before the command grammar is parsed and needs no network: project configuration plus the `origin` remote URL.
-- Repository precedence: explicit `--repo` > repository parsed from `origin` remote.
-- `--repo` accepts `[HOST/]OWNER[/...]/REPO`. A host, when present, must agree with the resolved provider; nested path segments are accepted for providers that use them.
-- GitHub and GitLab resolve from configuration, remote host, or `--provider`. Any other host or provider fails explicitly and never falls back to a supported provider.
+- Provider precedence is resolved independently for each domain: domain-specific CLI flag (`--code-provider` or `--work-item-provider`) > legacy `--provider` > matching domain-specific configuration (`codeProvider` or `workItemProvider`) > legacy configuration `provider` > known Git origin host.
+- `issue` is owned by the work-item provider; `pr`/`mr` is owned by the code-host provider. Grammar selection happens before parsing and requires no network. Unknown or unsupported configured values fail closed rather than falling back.
+- `--repo` scopes only the selected command; precedence is explicit `--repo` > the `origin` repository when its host matches the selected provider. If the provider and origin host differ, an explicit repository is required.
+- `--repo` accepts `[HOST/]OWNER[/...]/REPO`; GitLab also accepts a full HTTPS project URL, including self-managed instances. URL credentials, query strings, fragments, non-HTTPS schemes, and invalid project paths are rejected.
+- GitHub and known GitLab hosts resolve from configuration, remote host, or provider flags. Other hosts require explicit GitLab selection and a full project URL; unknown hosts do not fall back to a supported provider.
 - When outside a Git worktree, an explicit provider and repository are required.
 
-**Acceptance:** HTTPS and SSH GitHub and GitLab remotes resolve to the same repository path; an unknown host, an origin remote that belongs to another provider than the selected one, a `--repo` host that disagrees with the resolved provider, and a missing scope fail closed; explicit overrides take precedence; `group/subgroup/project` is accepted for GitLab and rejected for GitHub.
-**Verification:** Unit tests for resolution and remote parsing.
+**Acceptance:** Mixed code/work-item provider selections use the correct native grammar and provider adapter independently. Domain-specific flags override the legacy flag in their own domain; legacy config and Git origin provide fallback in that order. HTTPS and SSH remotes resolve to their repository paths; self-managed GitLab URLs preserve their host for authentication/operations. Unknown remotes, invalid provider names, mismatched provider without explicit repo, unsafe URLs, and missing repository scope fail closed; `group/subgroup/project` is accepted for GitLab and rejected for GitHub.
+**Verification:** Unit tests for provider selection, domain repository resolution, and remote parsing; CLI integration tests exercise mixed-provider routing and unsupported configuration.
 
 ### RF-CFG.3: GitHub issue defaults and label candidates
 **Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.1, RF-CFG.2
@@ -534,7 +628,7 @@ Edit regressions `project_auto_edit_selects_only_requested_fields_and_preserves_
 **Verification:** Payload-safety test and source review.
 
 ### RNF-SEC.2: DecisionModel credential and data boundary
-**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-WI.1, RF-WI.4
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-WI.1, RF-WI.4, RF-GL.6
 
 - Model requests occur only for issue create/edit automatic labels or opted-in Project field selection. Other operations do not send work-item text to a model.
 - The DecisionModel package receives provider-neutral work-item title/description and named candidates. Credentials and unrelated code-host metadata are not fetched for model context.
@@ -576,7 +670,7 @@ Edit regressions `project_auto_edit_selects_only_requested_fields_and_preserves_
 **Verification:** Release build and binary smoke run.
 
 ### RNF-TST.1: Isolated behavior verification
-**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-WI.1, RF-WI.2, RF-WI.3, RF-WI.4, RF-WI.8, RF-WI.9, RF-WI.10, RF-WI.11, RF-WI.12, RF-PR.1, RF-PR.2, RF-PR.3, RF-PR.4, RF-PR.5, RF-PR.6, RF-PR.7, RF-PR.8, RF-PR.9, RF-PR.10, RF-PR.11, RF-PR.16, RF-PR.17, RF-PR.18, RF-PR.19
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-WI.1, RF-WI.2, RF-WI.3, RF-WI.4, RF-WI.8, RF-WI.9, RF-WI.10, RF-WI.11, RF-WI.12, RF-PR.1, RF-PR.2, RF-PR.3, RF-PR.4, RF-PR.5, RF-PR.6, RF-PR.7, RF-PR.8, RF-PR.9, RF-PR.10, RF-PR.11, RF-PR.16, RF-PR.17, RF-PR.18, RF-PR.19, RF-GL.6
 
 - Tests exercise consumer-visible CLI output and provider boundaries without requiring live network access or mutating a real repository; Jev calls use a local HTTP fixture.
 - At least one built-binary smoke run exercises a successful command and a failure path.

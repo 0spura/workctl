@@ -17,19 +17,26 @@ use domain::AppError;
 fn main() -> ExitCode {
     let argv = std::env::args_os().collect::<Vec<OsString>>();
     let cwd = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
-    let provider = config::select_provider(cli::prescan_value(&argv, "--provider").as_deref(), &cwd);
+    let providers = config::select_providers(
+        cli::prescan_value(&argv, "--code-provider").as_deref(),
+        cli::prescan_value(&argv, "--work-item-provider").as_deref(),
+        cli::prescan_value(&argv, "--provider").as_deref(),
+        &cwd,
+    );
 
-    let matches = match cli::command_tree(provider).try_get_matches_from(&argv) {
+    let matches = match cli::command_tree(providers).try_get_matches_from(&argv) {
         Ok(matches) => matches,
-        Err(error) => return report_parse_failure(provider, error),
+        Err(error) => return report_parse_failure(providers, error),
     };
-    let globals = match cli::GlobalArgs::from_arg_matches(&matches) {
+    let mut globals = match cli::GlobalArgs::from_arg_matches(&matches) {
         Ok(globals) => globals,
-        Err(error) => return report_parse_failure(provider, error),
+        Err(error) => return report_parse_failure(providers, error),
     };
-    let command = match cli::ActiveCommand::from_matches(provider, &matches) {
+    globals.code_provider = Some(providers.code);
+    globals.work_item_provider = Some(providers.work_items);
+    let command = match cli::ActiveCommand::from_matches(providers, &matches) {
         Ok(command) => command,
-        Err(error) => return report_parse_failure(provider, error),
+        Err(error) => return report_parse_failure(providers, error),
     };
 
     match commands::execute(globals, command) {
@@ -41,33 +48,33 @@ fn main() -> ExitCode {
     }
 }
 
-fn report_parse_failure(provider: config::Provider, error: clap::Error) -> ExitCode {
+fn report_parse_failure(providers: config::ProviderSelection, error: clap::Error) -> ExitCode {
     match error.kind() {
         clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion => {
             let _ = error.print();
             ExitCode::SUCCESS
         }
         _ => {
-            let message = wrong_group_hint(provider, &error)
-                .unwrap_or("invalid command-line arguments");
+            let message =
+                wrong_group_hint(providers, &error).unwrap_or("invalid command-line arguments");
             output::json::write_error(&AppError::invalid_input(message));
             ExitCode::from(2)
         }
     }
 }
 
-/// Names the group a caller probably wanted when they use the other provider's name for it.
-///
-/// `pr` is the GitHub group; GitLab spells merge requests `mr`. The hint says what GitLab calls
-/// them and that the group does not exist yet, so it never implies a command that is not there.
-fn wrong_group_hint(provider: config::Provider, error: &clap::Error) -> Option<&'static str> {
-    if provider != config::Provider::Gitlab {
-        return None;
+fn wrong_group_hint(
+    providers: config::ProviderSelection,
+    error: &clap::Error,
+) -> Option<&'static str> {
+    let invalid = error.context().find_map(|(kind, value)| {
+        (matches!(kind, clap::error::ContextKind::InvalidSubcommand)).then(|| value.to_string())
+    })?;
+    match (providers.code, invalid.as_str()) {
+        (config::Provider::Gitlab, "pr") => {
+            Some("GitLab merge requests use the `mr` command group")
+        }
+        (config::Provider::Github, "mr") => Some("GitHub pull requests use the `pr` command group"),
+        _ => None,
     }
-    let named_pr = error.context().any(|(kind, value)| {
-        matches!(kind, clap::error::ContextKind::InvalidSubcommand) && value.to_string() == "pr"
-    });
-    named_pr.then_some(
-        "the GitLab grammar has no `pr` group; GitLab merge requests use `mr`, which is not implemented yet",
-    )
 }

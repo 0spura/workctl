@@ -1,6 +1,6 @@
-use crate::domain::{body, AppError, PullRequest};
-use crate::providers::github::prs::{read, GitHubPulls};
-use crate::providers::{resolve_body_change, MergeMethod, NewPr, PrPatch, ReviewEvent};
+use crate::domain::{AppError, PullRequest, body};
+use crate::providers::github::prs::{GitHubPulls, read};
+use crate::providers::{MergeMethod, NewPr, PrPatch, ReviewEvent, resolve_body_change};
 
 pub(super) fn create(provider: &GitHubPulls, pr: &NewPr) -> Result<PullRequest, AppError> {
     if !pr.attachments.is_empty() {
@@ -265,11 +265,7 @@ pub(super) fn reopen(
     Ok(())
 }
 
-pub(super) fn comment(
-    provider: &GitHubPulls,
-    number: u64,
-    body: &str,
-) -> Result<(), AppError> {
+pub(super) fn comment(provider: &GitHubPulls, number: u64, body: &str) -> Result<(), AppError> {
     let args = vec![
         "pr".to_owned(),
         "comment".to_owned(),

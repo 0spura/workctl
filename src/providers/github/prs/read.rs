@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use crate::domain::{AppError, CheckRun, PullRequest, PullRequestSummary};
-use crate::providers::github::prs::{mapping, GitHubPulls};
+use crate::providers::github::prs::{GitHubPulls, mapping};
 use crate::providers::{PrChecksOptions, PrQuery};
 
 const SHOW_FIELDS: &str = "number,title,body,state,isDraft,url,baseRefName,headRefName,author,createdAt,updatedAt,mergedAt,mergeable,reviewDecision,labels,assignees";

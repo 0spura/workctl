@@ -1,5 +1,5 @@
-use crate::cli::github::prs::{MergeArgs, MergeMethodArg};
 use crate::cli::GlobalArgs;
+use crate::cli::github::prs::{MergeArgs, MergeMethodArg};
 use crate::commands::support;
 use crate::domain::AppError;
 use crate::output::SuccessOutput;

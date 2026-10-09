@@ -2,12 +2,12 @@ use std::collections::HashSet;
 
 use crate::cli::GlobalArgs;
 use crate::cli::gitlab::issues::UpdateArgs;
+use crate::commands::labels::automatic_label_names;
 use crate::commands::support;
-use crate::domain::AppError;
+use crate::decision_model::{DecisionInput, DecisionModel};
+use crate::domain::{AppError, DecisionCandidate};
 use crate::output::SuccessOutput;
-use crate::providers::gitlab::issues::GitLabIssueUpdate;
-
-use super::shared::{provider, validate_description};
+use crate::providers::gitlab::issues::{GitLabIssueUpdate, GitLabIssues};
 
 pub(super) fn execute(globals: &GlobalArgs, args: UpdateArgs) -> Result<SuccessOutput, AppError> {
     let description = support::optional_text(
@@ -20,11 +20,20 @@ pub(super) fn execute(globals: &GlobalArgs, args: UpdateArgs) -> Result<SuccessO
             "glab issue update cannot clear an issue description with an empty value",
         ));
     }
-    validate_description(description.as_deref().unwrap_or_default())?;
     validate_update_assignees(&args.assignees, args.unassign)?;
+
+    if args.unlabels.iter().any(|label| label == "@auto") {
+        return Err(AppError::invalid_input(
+            "--unlabel does not accept the automatic-label marker",
+        ));
+    }
+    let mut labels = args.labels;
+    let automatic = labels.iter().any(|label| label == "@auto");
+    labels.retain(|label| label != "@auto");
     if args.title.is_none()
         && description.is_none()
-        && args.labels.is_empty()
+        && labels.is_empty()
+        && !automatic
         && args.unlabels.is_empty()
         && args.assignees.is_empty()
         && !args.unassign
@@ -36,28 +45,85 @@ pub(super) fn execute(globals: &GlobalArgs, args: UpdateArgs) -> Result<SuccessO
     {
         return Err(AppError::invalid_input("update requires a field to change"));
     }
-    let provider = provider(globals)?;
-    Ok(SuccessOutput::Issue(provider.update(
-        args.number.0,
-        &GitLabIssueUpdate {
-            title: args.title,
-            description,
-            labels_add: args.labels,
-            labels_remove: args.unlabels,
-            assignees: args.assignees,
-            unassign: args.unassign,
-            milestone: args.milestone,
-            confidential: if args.confidential {
-                Some(true)
-            } else if args.public {
-                Some(false)
-            } else {
-                None
-            },
-            weight: args.weight,
-            due_date: args.due_date,
+
+    let model = automatic
+        .then(DecisionModel::from_environment)
+        .transpose()?;
+    let repo = support::resolve_repo(globals.work_item_provider, globals.repo.as_deref())?;
+    let provider = GitLabIssues::new(repo)?;
+    provider.authenticate()?;
+    let mut unchanged_issue = None;
+    let automatic_labels = if let Some(model) = model {
+        let initial = provider.show(args.number.0)?;
+        let candidates = provider
+            .labels()?
+            .into_iter()
+            .map(|label| DecisionCandidate {
+                name: label.name,
+                description: label.description,
+            })
+            .collect::<Vec<_>>();
+        let title = args.title.as_deref().unwrap_or(&initial.title);
+        let description_text = description.as_deref().unwrap_or(&initial.body);
+        let scores = model.suggest(DecisionInput {
+            title,
+            description: description_text,
+            candidates: &candidates,
+        })?;
+        let selected = automatic_label_names(&scores, &candidates);
+        let current = provider.show(args.number.0)?;
+        if current.updated_at != initial.updated_at {
+            return Err(AppError::conflict());
+        }
+        unchanged_issue = Some(current);
+        selected
+    } else {
+        Vec::new()
+    };
+    for label in automatic_labels {
+        if !labels.contains(&label) {
+            labels.push(label);
+        }
+    }
+    let patch = GitLabIssueUpdate {
+        title: args.title,
+        description,
+        labels_add: labels,
+        labels_remove: args.unlabels,
+        assignees: args.assignees,
+        unassign: args.unassign,
+        milestone: args.milestone,
+        confidential: if args.confidential {
+            Some(true)
+        } else if args.public {
+            Some(false)
+        } else {
+            None
         },
-    )?))
+        weight: args.weight,
+        due_date: args.due_date,
+    };
+    if automatic
+        && patch.labels_add.is_empty()
+        && patch.title.is_none()
+        && patch.description.is_none()
+        && patch.labels_remove.is_empty()
+        && patch.assignees.is_empty()
+        && !patch.unassign
+        && patch.milestone.is_none()
+        && patch.confidential.is_none()
+        && patch.weight.is_none()
+        && patch.due_date.is_none()
+    {
+        let issue = match unchanged_issue {
+            Some(issue) => issue,
+            None => provider.show(args.number.0)?,
+        };
+        return Ok(SuccessOutput::Issue(issue));
+    }
+    Ok(SuccessOutput::Issue(
+        provider.update(args.number.0, &patch)?,
+    ))
 }
 
 fn validate_update_assignees(assignees: &[String], unassign: bool) -> Result<(), AppError> {
