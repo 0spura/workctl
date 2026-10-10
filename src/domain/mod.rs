@@ -4,6 +4,7 @@ mod issue;
 mod label;
 pub mod patch;
 mod pr;
+pub use body::ClosingReference;
 pub use error::AppError;
 pub use issue::{GitHubIssueView, Issue, IssueState, IssueSummary, RelatedIssue};
 pub use label::{DecisionCandidate, DecisionScore, RepositoryLabel};

@@ -8,10 +8,14 @@ use super::shared;
 
 pub(super) fn execute(globals: &GlobalArgs, args: LockArgs) -> Result<SuccessOutput, AppError> {
     let provider = shared::provider(globals)?;
-    provider.lock(args.number.0, args.reason.as_deref())?;
+    if args.undo {
+        provider.unlock(args.number.0)?;
+    } else {
+        provider.lock(args.number.0, args.reason.as_deref())?;
+    }
     Ok(SuccessOutput::ConversationLock {
         number: args.number.0,
         target: "issue".to_owned(),
-        locked: true,
+        locked: !args.undo,
     })
 }

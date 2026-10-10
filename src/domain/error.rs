@@ -75,6 +75,13 @@ impl AppError {
         Self::new("github_cli", "the GitHub CLI operation failed")
     }
 
+    pub const fn github_write_uncertain() -> Self {
+        Self::new(
+            "github_write_uncertain",
+            "the GitHub write may have succeeded; inspect the remote resource before retrying",
+        )
+    }
+
     pub const fn decision_authentication() -> Self {
         Self::new(
             "decision_authentication",

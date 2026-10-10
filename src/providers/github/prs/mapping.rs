@@ -87,6 +87,12 @@ struct CliCheckRun {
     workflow: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct CliHeadRef {
+    #[serde(rename = "headRefOid")]
+    head_ref_oid: String,
+}
+
 pub fn pull_request(bytes: &[u8]) -> Result<PullRequest, AppError> {
     let response: CliPullRequest =
         serde_json::from_slice(bytes).map_err(|_| AppError::provider_response())?;
@@ -159,6 +165,16 @@ pub fn pull_request_status(bytes: &[u8]) -> Result<PullRequestStatus, AppError> 
             .map(|value| value.to_ascii_lowercase()),
         required_checks: Vec::new(),
     })
+}
+
+/// Reads the head commit OID from `gh pr view --json headRefOid`.
+pub fn head_sha(bytes: &[u8]) -> Result<String, AppError> {
+    let response: CliHeadRef =
+        serde_json::from_slice(bytes).map_err(|_| AppError::provider_response())?;
+    if response.head_ref_oid.trim().is_empty() {
+        return Err(AppError::provider_response());
+    }
+    Ok(response.head_ref_oid)
 }
 
 pub fn pull_request_summaries(bytes: &[u8]) -> Result<Vec<PullRequestSummary>, AppError> {

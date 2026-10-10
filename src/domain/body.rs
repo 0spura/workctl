@@ -60,9 +60,152 @@ fn atx_level(line: &str) -> Option<usize> {
     }
 }
 
+/// An issue a pull-request body closes when the pull request merges.
+///
+/// GitHub links the pull request to the issue when the body carries a closing keyword next to the
+/// reference, and closes the issue when the pull request merges.
+#[derive(Debug, Clone)]
+pub struct ClosingReference {
+    /// `OWNER/REPO` when the issue lives outside the pull request's repository.
+    pub repo: Option<String>,
+    pub number: u64,
+}
+
+impl std::fmt::Display for ClosingReference {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.repo {
+            Some(repo) => write!(formatter, "{repo}#{}", self.number),
+            None => write!(formatter, "#{}", self.number),
+        }
+    }
+}
+
+/// Repository names are case-insensitive on GitHub, so references compare that way too.
+impl PartialEq for ClosingReference {
+    fn eq(&self, other: &Self) -> bool {
+        if self.number != other.number {
+            return false;
+        }
+        match (&self.repo, &other.repo) {
+            (None, None) => true,
+            (Some(left), Some(right)) => left.eq_ignore_ascii_case(right),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for ClosingReference {}
+
+impl std::str::FromStr for ClosingReference {
+    type Err = &'static str;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        /// Mirrors the canonical reference form: no empty, `.`, or `..` segment, and no character
+        /// a GitHub repository name cannot hold.
+        fn valid_part(part: &str) -> bool {
+            !part.is_empty()
+                && part != "."
+                && part != ".."
+                && part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+        }
+
+        const INVALID: &str = "expected a positive issue number or OWNER/REPO#NUMBER";
+        let Some((repo, number)) = value.split_once('#') else {
+            return Ok(Self {
+                repo: None,
+                number: positive_number(value).ok_or(INVALID)?,
+            });
+        };
+        let number = positive_number(number).ok_or(INVALID)?;
+        // `#NUMBER` names an issue in the pull request's own repository.
+        if repo.is_empty() {
+            return Ok(Self { repo: None, number });
+        }
+        let mut parts = repo.split('/');
+        let (owner, name) = (parts.next(), parts.next());
+        if parts.next().is_some() {
+            return Err(INVALID);
+        }
+        let (Some(owner), Some(name)) = (owner, name) else {
+            return Err(INVALID);
+        };
+        if !valid_part(owner) || !valid_part(name) {
+            return Err(INVALID);
+        }
+        Ok(Self {
+            repo: Some(format!("{owner}/{name}")),
+            number,
+        })
+    }
+}
+
+/// Closing keywords GitHub accepts in a pull-request body.
+const CLOSING_KEYWORDS: [&str; 9] = [
+    "close", "closes", "closed", "fix", "fixes", "fixed", "resolve", "resolves", "resolved",
+];
+
+/// Adds and removes closing-reference lines, returning `None` when the body would not change.
+///
+/// Only a line holding one closing keyword and one reference is a closing line. A line naming
+/// several references, or any other mention of one, is left untouched, so a removal never rewrites
+/// prose the caller wrote.
+pub fn apply_closing_references(
+    body: &str,
+    add: &[ClosingReference],
+    remove: &[ClosingReference],
+) -> Option<String> {
+    let mut changed = false;
+    let mut kept: Vec<&str> = Vec::new();
+    for line in body.split('\n') {
+        match closing_line(line) {
+            Some(reference) if remove.contains(&reference) => changed = true,
+            _ => kept.push(line),
+        }
+    }
+    let mut text = if changed {
+        kept.join("\n").trim_end_matches('\n').to_owned()
+    } else {
+        body.to_owned()
+    };
+    for reference in add {
+        if !closes(body, reference) {
+            text = append(&text, &format!("Closes {reference}"));
+            changed = true;
+        }
+    }
+    changed.then_some(text)
+}
+
+/// The reference a line closes, when that line is exactly one closing keyword and one reference.
+fn closing_line(line: &str) -> Option<ClosingReference> {
+    let mut parts = line.split_whitespace();
+    let keyword = parts.next()?;
+    let reference = parts.next()?;
+    if parts.next().is_some()
+        || !CLOSING_KEYWORDS
+            .iter()
+            .any(|known| keyword.eq_ignore_ascii_case(known))
+    {
+        return None;
+    }
+    reference.parse::<ClosingReference>().ok()
+}
+
+/// True when `body` already carries a closing line for `reference`.
+fn closes(body: &str, reference: &ClosingReference) -> bool {
+    body.split('\n')
+        .any(|line| closing_line(line).is_some_and(|found| found == *reference))
+}
+
+fn positive_number(value: &str) -> Option<u64> {
+    value.parse::<u64>().ok().filter(|number| *number > 0)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{append, replace_section};
+    use super::{ClosingReference, append, apply_closing_references, replace_section};
 
     #[test]
     fn append_separates_with_one_newline_and_handles_empty_bodies() {
@@ -106,8 +249,84 @@ mod tests {
             "section_not_found"
         );
         assert_eq!(
-            replace_section(body, "Acceptance", "x").unwrap_err().code,
+            replace_section(&body, "Acceptance", "x").unwrap_err().code,
             "invalid_input"
         );
+    }
+
+    fn reference(value: &str) -> ClosingReference {
+        value.parse().expect("valid closing reference")
+    }
+
+    #[test]
+    fn adds_one_closing_line_per_reference_and_is_idempotent() {
+        let add = [reference("#7"), reference("acme/service#12")];
+        assert_eq!(
+            apply_closing_references("Details.", &add, &[]).expect("changed"),
+            "Details.\nCloses #7\nCloses acme/service#12"
+        );
+        assert_eq!(
+            apply_closing_references("", &[reference("#7")], &[]).expect("changed"),
+            "Closes #7"
+        );
+        assert!(apply_closing_references("Closes #7", &[reference("#7")], &[]).is_none());
+        // A keyword-only mention of the issue is not a closing line, so the reference is added.
+        assert_eq!(
+            apply_closing_references("See #7 for context", &[reference("#7")], &[])
+                .expect("changed"),
+            "See #7 for context\nCloses #7"
+        );
+    }
+
+    #[test]
+    fn removes_only_the_named_closing_lines() {
+        let body = "Details.\n\nCloses #5\nFixes #6\nSee #7 for context\nCloses #5, #6";
+        assert_eq!(
+            apply_closing_references(body, &[], &[reference("#5")]).expect("changed"),
+            "Details.\n\nFixes #6\nSee #7 for context\nCloses #5, #6"
+        );
+        assert!(apply_closing_references(body, &[], &[reference("#9")]).is_none());
+        // Keywords and repository names compare case-insensitively.
+        assert_eq!(
+            apply_closing_references(
+                "intro\nCLOSES Acme/Service#12",
+                &[],
+                &[reference("acme/service#12")]
+            )
+            .expect("changed"),
+            "intro"
+        );
+    }
+
+    #[test]
+    fn parses_and_formats_both_reference_forms() {
+        assert_eq!(reference("#7").to_string(), "#7");
+        assert_eq!(reference("7").number, 7);
+        assert_eq!(reference("7").repo, None);
+        assert_eq!(reference("acme/service#12").to_string(), "acme/service#12");
+        for invalid in [
+            "",
+            "0",
+            "#",
+            "#0",
+            "acme/service",
+            "acme/service#0",
+            "acme/service#x",
+            "acme//service#1",
+            "acme/#1",
+            "acme/service/extra#1",
+        ] {
+            assert!(
+                invalid.parse::<ClosingReference>().is_err(),
+                "{invalid} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn compares_repository_names_case_insensitively() {
+        assert_eq!(reference("Acme/Service#7"), reference("acme/service#7"));
+        assert_ne!(reference("#7"), reference("acme/service#7"));
+        assert_ne!(reference("#7"), reference("#8"));
     }
 }

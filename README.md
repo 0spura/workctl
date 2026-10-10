@@ -29,13 +29,15 @@ workctl issue list --state open --limit 30
 workctl issue list --label bug --label p1 --assignee me --search "in:title fix"
 workctl issue view 123
 workctl issue blockers 30
-workctl issue close 123 --comment "Fixed in 1.4.3" --reason completed
-workctl issue close 123 --duplicate-of 118
-workctl issue reopen 123 --comment "Still reproducible"
+workctl issue edit 123 --state closed --comment "Fixed in 1.4.3" --reason completed
+workctl issue edit 123 --state closed --duplicate-of 118
+workctl issue edit 123 --state open --comment "Still reproducible"
 workctl issue comment 123 --body "Reproduced on 1.4.2"
 workctl issue comment 123 --body-file - < notes.md
 workctl issue lock 123 --reason resolved
-workctl issue unlock 123
+workctl issue lock 123 --undo
+workctl issue develop 123 --name fix/parser-crash --checkout
+workctl issue develop 123 --list
 workctl issue create --title "Crash on save" --body-file report.md --label @auto
 workctl issue create --title "Plan the migration" --project-field "Priority=High" --project-field "Start date=2026-10-07"
 workctl issue edit 123 --title "Updated title" --add-label @auto
@@ -67,7 +69,7 @@ Output is compact JSON by default. Add `--format text` for human-readable output
 GitHub `issue view NUMBER` additionally returns `issue_type` (string or null), `parent` (issue reference or null), and a `sub_issues` array. Each reference has `number`, `title`, `state`, and `url`. Sub-issues are paginated in pages of 100, up to 1,000 relationships and ten pages; unavailable, malformed, or incomplete hierarchy data fails the view. Blocker relationships are neither queried nor printed by `issue view`; use `issue blockers` to inspect them. Native dependency editing and create/edit/list and GitLab outputs remain unchanged.
 `workctl issue blockers NUMBER` is the context-light alternative: it returns only complete chains of open blockers, such as `#18 -> #29 -> #30`; with no open blocker chain it prints nothing in text mode and `[]` in JSON. It omits titles, bodies, and closed issues. Cross-repository references include `OWNER/REPO#NUMBER`. It does not claim that the issue is ready when the output is empty. Traversal is bounded to 20 issue reads, 500 edges, 20 paths, and 20 issues per path. If a bound prevents a complete result, the command fails rather than presenting a partial chain as complete.
 
-`issue close`, `issue reopen`, `issue comment`, `issue lock`, and `issue unlock` forward one native `gh issue` operation each and pass only the options you supply, so no reason, comment, or duplicate reference is inferred. `--reason` on close accepts `completed`, `not planned`, or `duplicate`; lock reasons are `off_topic`, `resolved`, `spam`, and `too_heated`. Comment text comes from exactly one of `--body` or `--body-file` (`-` reads stdin) and is sent to `gh` on stdin rather than in the process arguments. Results are compact: close and reopen return `{"number", "state"}`, comment returns `{"number", "target": "issue"}`, and lock and unlock return `{"number", "target": "issue", "locked"}`. These commands never read or edit existing comment threads.
+Issue state changes use `issue edit NUMBER --state open|closed`; ordinary edits may be combined with the transition. `--comment` adds an authored transition comment after the state change, while `--reason` (`completed`, `not planned`, or `duplicate`) and `--duplicate-of` apply only to closing. Lock reasons are `off_topic`, `resolved`, `spam`, and `too_heated`; `issue lock --undo` unlocks. Transition comments and comment bodies travel on stdin rather than process arguments. Combined writes are sequential and not rolled back or retried; inspect GitHub before retrying after a partial failure. `edit` returns the full issue record; `comment` returns `{"number", "target": "issue"}`; `lock` returns `{"number", "target": "issue", "locked"}`. `issue develop NUMBER` creates the branch GitHub links to the issue and returns `{number,branch}`; `--list` reports `{number,branches}` for the branches already linked and performs no write. The branch is created on the remote and workctl never creates a local branch itself, so only `--checkout` changes the current worktree. `--base` and `--name` shape the created branch and conflict with `--list`.
 
 Global options apply before or after the group subcommand:
 
@@ -161,14 +163,15 @@ workctl pr edit 42 --append-body "Reproduced on 1.4.2."
 workctl pr edit 42 --replace-section "## Acceptance" --section-body "New criteria"
 workctl pr edit 42 --patch-file body.patch
 workctl pr edit 42 --add-label bug --remove-label stale --add-reviewer hubot --remove-reviewer octocat
+workctl pr edit 42 --closes 123 --closes other/repo#7 --remove-closes 118
 workctl pr edit 42 --title "Updated title" --expect-updated-at 2026-01-02T00:00:00Z
 workctl pr ready 42
 workctl pr ready 42 --undo
-workctl pr close 42 --comment "Superseded by #43" --delete-branch
-workctl pr reopen 42 --comment "Reopening"
+workctl pr edit 42 --state closed --comment "Superseded by #43" --delete-branch
+workctl pr edit 42 --state open --comment "Reopening"
 workctl pr comment 42 --body "Looks good to me"
 workctl pr lock 42 --reason resolved
-workctl pr unlock 42
+workctl pr lock 42 --undo
 workctl pr revert 42 --title "Revert parser rewrite" --body "Caused the 1.4.2 regression" --draft
 ```
 
@@ -178,11 +181,11 @@ Creation accepts optional `--assignee`, `--label`, `--reviewer` (pull requests),
 `pr checks --watch` waits using GitHub CLI's native watch mode rather than polling in workctl. `--interval` (1–300 seconds) and `--fail-fast` are watch-only; `--watch-timeout` is also watch-only and sets an absolute process deadline from 1 to 3600 seconds (default 600). Check failures are returned as check data; a timeout returns a safe error with no partial report. Normal `pr checks` keeps its existing behavior and timeout.
 `pr checkout NUMBER` delegates to `gh pr checkout NUMBER` in the current worktree. GitHub CLI retains its normal protection for local changes; workctl never passes `--force` and does not expose branch override, detached-HEAD, or separate-worktree options. Success reports `{"number": NUMBER}` in JSON or `pr #NUMBER checked out` in text; this changes the current local branch.
 
-`pr merge` accepts `--method merge|squash|rebase`, `--delete-branch`, and `--auto`. Method precedence is explicit `--method`, then `defaults.github.pr.mergeMethod`, then GitHub CLI inference. `defaults.github.pr.deleteBranch` is a boolean (default `false`); when true, it enables branch deletion for every merge, while `--delete-branch` enables it for one merge when the setting is false. There is no per-command inverse flag. Without a configured or explicit method, `gh` chooses as before. `pr edit` reuses the body-change table above and adds `--base`, `--add-label`/`--remove-label`, `--add-reviewer`/`--remove-reviewer`, `--add-assignee`/`--remove-assignee`, and `--milestone`. `pr ready` marks the pull request ready for review, and `--undo` converts it back to a draft.
+`pr merge` accepts `--method merge|squash|rebase`, `--delete-branch`, and `--auto`. Method precedence is explicit `--method`, then `defaults.github.pr.mergeMethod`, then GitHub CLI inference. `defaults.github.pr.deleteBranch` is a boolean (default `false`); when true, it enables branch deletion for every merge, while `--delete-branch` enables it for one merge when the setting is false. There is no per-command inverse flag. Without a configured or explicit method, `gh` chooses as before. `pr edit` reuses the body-change table above and adds `--base`, `--add-label`/`--remove-label`, `--add-reviewer`/`--remove-reviewer`, `--add-assignee`/`--remove-assignee`, `--closes`/`--remove-closes`, and `--milestone`. `--closes` and `--remove-closes` accept `NUMBER` or `OWNER/REPO#NUMBER` and manage closing references as body text in the same single write: a missing reference is appended as one `Closes <reference>` line, and a removal drops a line that holds one closing keyword and that reference. An addition already present or a removal that matches nothing leaves the body alone and sends no write on its own. `pr ready` marks the pull request ready for review, and `--undo` converts it back to a draft.
+Output shape: `create`, `view`, and `edit` return full pull-request records; `status` returns `{number,title,state,draft,url,base_ref,head_ref,mergeable,review_decision,required_checks}`; `list` returns summaries; `checkout` returns `{number}`; `diff` returns `{number,diff}`; `checks` returns check runs; `review` returns `{number,event}`; `merge` returns `{number,method,auto}`; `update-branch` returns `{number,rebase}`; `ready` returns `{number,draft}`; `comment` returns `{number,target:"pr"}`; `lock` returns `{number,target:"pr",locked}`; `revert` returns the new PR number.
 
-Output shape per command: `create`, `view`, and `edit` return a pull request object; `status` returns `{number, title, state, draft, url, base_ref, head_ref, mergeable, review_decision, required_checks}`; `list` returns an array of summaries; `checkout` returns `{"number"}`; `diff` returns `{"number", "diff"}`; `checks` returns an array of `{name, state, bucket, description, link, workflow}`; `review` returns `{"number", "event"}`; `merge` returns `{"number", "method", "auto"}`; `update-branch` returns `{"number", "rebase"}` on success; `ready` returns `{"number", "draft"}`; `close` and `reopen` return `{"number", "state"}`; `comment` returns `{"number", "target": "pr"}`; `lock` and `unlock` return `{"number", "target": "pr", "locked"}`; `revert` returns `{"number", "pull_request"}`, naming the reverted pull request and the newly created revert.
-
-`pr comment`, `pr lock`, and `pr unlock` forward one native `gh pr` operation each. Comment text comes from exactly one of `--body` or `--body-file` (`-` reads stdin) and travels on stdin, never in the process arguments. `pr revert NUMBER` opens a new pull request that reverts the merge; `--title`, `--body`/`--body-file`, and `--draft` are forwarded only when supplied. Creating the revert is a remote write and is never retried automatically; if the command succeeds but prints no readable pull-request URL, it fails with `provider_response` so you can check GitHub before retrying.
+`pr edit NUMBER --state open|closed` changes lifecycle state after ordinary edits; `--comment` posts a transition comment, and `--delete-branch` is valid only when closing. Merged PRs cannot change state. `pr lock --undo` unlocks. These writes are sequential, not rolled back or retried; inspect GitHub after a partial failure. Standalone `pr comment` and transition comments travel on stdin. `pr review --inline PATH:LINE[:left|right] TEXT` adds a single-line diff comment; repeated `--inline` and `--inline-file` options are submitted in one review anchored to the observed head SHA. Inline COMMENT and REQUEST_CHANGES reviews require an authored summary. If GitHub's response does not confirm submission, the result is uncertain; workctl does not retry.
+`pr comment NUMBER` adds a top-level comment. Its body comes from exactly one of `--body` or `--body-file` (`-` reads stdin) and travels on stdin, never in process arguments. `pr revert NUMBER` opens a new pull request that reverts the merge; `--title`, `--body`/`--body-file`, and `--draft` are forwarded only when supplied. A revert write is never retried automatically; if its result is unreadable, check GitHub before retrying.
 
 ## Repository context
 

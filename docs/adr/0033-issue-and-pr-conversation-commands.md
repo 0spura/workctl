@@ -1,6 +1,6 @@
 # Issue and pull-request conversation lifecycle commands
 
-- Status: Accepted
+- Status: Superseded for GitHub lifecycle grouping by [ADR-0035](./0035-github-command-consolidation.md)
 - Date: 2026-10-08
 - Tracker: None
 

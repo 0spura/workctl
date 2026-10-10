@@ -124,6 +124,18 @@ fn write_to(stdout: &mut impl Write, output: &SuccessOutput) -> Result<(), AppEr
             write_safe(stdout, state, false)?;
             writeln!(stdout).map_err(|_| AppError::output())?;
         }
+        SuccessOutput::LinkedBranch { number, branch } => {
+            write!(stdout, "issue #{number} linked branch ").map_err(|_| AppError::output())?;
+            write_safe(stdout, branch, false)?;
+            writeln!(stdout).map_err(|_| AppError::output())?;
+        }
+        SuccessOutput::LinkedBranches { number, branches } => {
+            writeln!(stdout, "issue #{number} linked branches:").map_err(|_| AppError::output())?;
+            for branch in branches {
+                write_safe(stdout, branch, false)?;
+                writeln!(stdout).map_err(|_| AppError::output())?;
+            }
+        }
         SuccessOutput::Comment { number, target } => {
             writeln!(stdout, "{target} #{number} commented").map_err(|_| AppError::output())?;
         }

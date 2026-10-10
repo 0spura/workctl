@@ -2,7 +2,8 @@ pub mod github;
 pub mod gitlab;
 
 use crate::domain::{
-    AppError, CheckRun, Issue, IssueSummary, PullRequest, PullRequestStatus, PullRequestSummary,
+    AppError, CheckRun, ClosingReference, Issue, IssueSummary, PullRequest, PullRequestStatus,
+    PullRequestSummary,
 };
 
 use std::time::Duration;
@@ -83,7 +84,7 @@ pub struct NewPr {
     pub head: Option<String>,
     pub draft: bool,
     /// Issues the pull request closes when it merges.
-    pub closes: Vec<u64>,
+    pub closes: Vec<ClosingReference>,
     pub assignees: Vec<String>,
     pub labels: Vec<String>,
     pub reviewers: Vec<String>,
@@ -96,6 +97,10 @@ pub struct NewPr {
 pub struct PrPatch {
     pub title: Option<String>,
     pub body: Option<BodyChange>,
+    /// Issues linked as closed on merge, written into the body.
+    pub closes_add: Vec<ClosingReference>,
+    /// Closing references removed from the body.
+    pub closes_remove: Vec<ClosingReference>,
     pub base: Option<String>,
     pub labels_add: Vec<String>,
     pub labels_remove: Vec<String>,
@@ -111,11 +116,34 @@ pub struct PrPatch {
     pub expect_updated_at: Option<String>,
 }
 
+#[derive(Debug, Default)]
+pub struct PrTransition {
+    pub closed: bool,
+    pub comment: Option<String>,
+    pub delete_branch: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ReviewSide {
+    Left,
+    Right,
+}
+
+#[derive(Debug)]
+pub struct InlineReviewComment {
+    pub path: String,
+    pub line: u64,
+    pub side: ReviewSide,
+    pub body: String,
+}
+
 impl PrPatch {
     /// True when no field would be written; `expect_updated_at` only guards a write.
     pub fn is_empty(&self) -> bool {
         self.title.is_none()
             && self.body.is_none()
+            && self.closes_add.is_empty()
+            && self.closes_remove.is_empty()
             && self.base.is_none()
             && self.labels_add.is_empty()
             && self.labels_remove.is_empty()
@@ -171,14 +199,6 @@ pub trait WorkItemProvider {
     fn create(&self, issue: &NewIssue) -> Result<Issue, AppError>;
     fn list(&self, query: &IssueQuery) -> Result<Vec<IssueSummary>, AppError>;
     fn show(&self, number: u64) -> Result<Issue, AppError>;
-    fn close(
-        &self,
-        number: u64,
-        comment: Option<&str>,
-        reason: Option<&str>,
-        duplicate_of: Option<&str>,
-    ) -> Result<(), AppError>;
-    fn reopen(&self, number: u64, comment: Option<&str>) -> Result<(), AppError>;
     fn comment(&self, number: u64, body: &str) -> Result<(), AppError>;
     fn lock(&self, number: u64, reason: Option<&str>) -> Result<(), AppError>;
     fn unlock(&self, number: u64) -> Result<(), AppError>;
@@ -202,10 +222,22 @@ pub trait PullRequestProvider {
     /// Reads concise review/mergeability metadata and all required check evidence.
     fn status(&self, number: u64) -> Result<PullRequestStatus, AppError>;
     /// Fetches the pull request once, then applies the requested change.
-    fn edit(&self, number: u64, patch: &PrPatch) -> Result<PullRequest, AppError>;
+    fn edit(
+        &self,
+        number: u64,
+        patch: &PrPatch,
+        transition: Option<&PrTransition>,
+    ) -> Result<PullRequest, AppError>;
     fn diff(&self, number: u64, name_only: bool) -> Result<String, AppError>;
     fn checks(&self, number: u64, options: &PrChecksOptions) -> Result<Vec<CheckRun>, AppError>;
-    fn review(&self, number: u64, event: ReviewEvent, body: Option<&str>) -> Result<(), AppError>;
+    /// Submits one review; inline comments are submitted together in a single anchored request.
+    fn review(
+        &self,
+        number: u64,
+        event: ReviewEvent,
+        body: Option<&str>,
+        comments: &[InlineReviewComment],
+    ) -> Result<(), AppError>;
     fn merge(
         &self,
         number: u64,
@@ -219,13 +251,6 @@ pub trait PullRequestProvider {
     fn checkout(&self, number: u64) -> Result<(), AppError>;
     /// Marks the pull request ready for review, or back to draft when `draft` is set.
     fn set_ready(&self, number: u64, draft: bool) -> Result<(), AppError>;
-    fn close(
-        &self,
-        number: u64,
-        comment: Option<&str>,
-        delete_branch: bool,
-    ) -> Result<(), AppError>;
-    fn reopen(&self, number: u64, comment: Option<&str>) -> Result<(), AppError>;
     fn comment(&self, number: u64, body: &str) -> Result<(), AppError>;
     fn lock(&self, number: u64, reason: Option<&str>) -> Result<(), AppError>;
     fn unlock(&self, number: u64) -> Result<(), AppError>;

@@ -3,6 +3,7 @@
 mod common;
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
 use common::{Fixture, error_json, success_json};
@@ -22,6 +23,9 @@ fn gh_input(fixture: &Fixture) -> String {
     fs::read_to_string(&fixture.input).expect("read gh stdin capture")
 }
 
+/// The one review-API invocation an inline review may make.
+const REVIEW_POST: &str = "api --method POST repos/owner/repo/pulls/42/reviews --input -";
+
 #[test]
 fn create_sends_the_body_and_flags_to_gh() {
     let fixture = Fixture::new();
@@ -37,6 +41,8 @@ fn create_sends_the_body_and_flags_to_gh() {
             "7",
             "--closes",
             "9",
+            "--closes",
+            "other/repo#6",
             "--base",
             "main",
             "--head",
@@ -64,7 +70,7 @@ fn create_sends_the_body_and_flags_to_gh() {
 
     assert_eq!(
         gh_input(&fixture),
-        "Fixes the bug\n\nDetails.\nCloses #7\nCloses #9"
+        "Fixes the bug\n\nDetails.\nCloses #7\nCloses #9\nCloses other/repo#6"
     );
     let lines = gh_lines(&fixture);
     assert!(
@@ -413,6 +419,58 @@ fn edit_applies_a_body_change_and_rejects_a_stale_write() {
     );
 }
 
+/// RF-PR.8: closing references are body text, so an edit manages them without the caller
+/// reproducing the body.
+#[test]
+fn edit_manages_closing_references_in_the_body() {
+    let fixture = Fixture::new();
+    let linked = fixture.run_pr(
+        &[
+            "pr",
+            "edit",
+            "42",
+            "--closes",
+            "7",
+            "--closes",
+            "other/repo#6",
+        ],
+        "",
+    );
+    success_json(&linked);
+    assert_eq!(
+        gh_input(&fixture),
+        "PR body\nCloses #7\nCloses other/repo#6"
+    );
+    assert!(gh_lines(&fixture).contains(&"pr edit 42 --repo owner/repo --body-file -".to_string()));
+
+    // A fetched body already carrying closing lines loses only the named reference.
+    let unlinked = fixture.run_pr(
+        &["pr", "edit", "42", "--remove-closes", "other/repo#6"],
+        "pr-body-closes",
+    );
+    success_json(&unlinked);
+    assert_eq!(
+        gh_input(&fixture),
+        "PR body\n\nCloses #7\nSee #9 for context"
+    );
+
+    // A reference this body does not close leaves the body alone, so no write is sent.
+    fs::remove_file(&fixture.log).expect("clear gh argument log");
+    let unchanged = fixture.run_pr(&["pr", "edit", "42", "--remove-closes", "7"], "");
+    success_json(&unchanged);
+    let lines = gh_lines(&fixture);
+    assert!(
+        !lines.iter().any(|line| line.starts_with("pr edit")),
+        "actual gh calls: {lines:?}"
+    );
+
+    let conflicting = fixture.run_pr(
+        &["pr", "edit", "42", "--closes", "7", "--remove-closes", "7"],
+        "",
+    );
+    assert_eq!(error_json(&conflicting)["code"], "invalid_input");
+}
+
 #[test]
 fn edit_forwards_metadata_flags_and_requires_a_change() {
     let fixture = Fixture::new();
@@ -577,9 +635,44 @@ fn checkout_switches_to_the_pr_branch_without_force_and_reports_safe_failure() {
     );
 }
 
+/// A fixture whose `pr view` read-backs report the state a transition produced.
+///
+/// The shared fixture answers every read with a fixed state, so a lifecycle test could never
+/// observe a closed result. This wrapper keeps a state file, delegates every write to the shared
+/// mock unchanged, and answers only `pr view` with a record carrying the tracked state.
+fn pr_lifecycle_fixture() -> Fixture {
+    let fixture = Fixture::new();
+    fs::rename(fixture.bin.join("gh"), fixture.bin.join("gh-shared"))
+        .expect("keep the shared gh mock");
+    let script = r#"#!/bin/sh
+shared="$(dirname "$WORKCTL_GH_LOG")/bin/gh-shared"
+state_file="$(dirname "$WORKCTL_GH_LOG")/pr-state"
+case "$1 $2" in
+    "pr close") printf 'CLOSED' > "$state_file" ;;
+    "pr reopen") printf 'OPEN' > "$state_file" ;;
+esac
+current="$(cat "$state_file" 2>/dev/null || printf 'OPEN')"
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+    number="$3"
+    printf '%s\n' "$*" >> "$WORKCTL_GH_LOG"
+    printf '%s\n' "{\"number\":$number,\"title\":\"Add pull requests\",\"body\":\"PR body\",\"state\":\"$current\",\"isDraft\":false,\"url\":\"https://github.com/owner/repo/pull/$number\",\"baseRefName\":\"main\",\"headRefName\":\"feature-x\",\"author\":{\"login\":\"octocat\"},\"createdAt\":\"2026-01-01T00:00:00Z\",\"updatedAt\":\"2026-01-02T00:00:00Z\",\"mergedAt\":\"\",\"mergeable\":\"MERGEABLE\",\"reviewDecision\":\"\",\"labels\":[{\"name\":\"bug\"}],\"assignees\":[{\"login\":\"hubot\"}]}"
+    exit 0
+fi
+exec "$shared" "$@"
+"#;
+    let path = fixture.bin.join("gh");
+    fs::write(&path, script).expect("write stateful gh wrapper");
+    let mut permissions = fs::metadata(&path)
+        .expect("read wrapper permissions")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&path, permissions).expect("make wrapper executable");
+    fixture
+}
+
 #[test]
 fn review_merge_ready_close_and_reopen_use_the_gh_commands() {
-    let fixture = Fixture::new();
+    let fixture = pr_lifecycle_fixture();
 
     let approved = fixture.run_pr(
         &["pr", "review", "42", "--approve", "--body", "Looks good"],
@@ -621,19 +714,31 @@ fn review_merge_ready_close_and_reopen_use_the_gh_commands() {
     assert_eq!(success_json(&draft), json!({"number": 42, "draft": true}));
 
     let closed = fixture.run_pr(
-        &["pr", "close", "42", "--comment", "bye", "--delete-branch"],
+        &[
+            "pr",
+            "edit",
+            "42",
+            "--state",
+            "closed",
+            "--comment",
+            "bye",
+            "--delete-branch",
+        ],
         "",
     );
-    assert_eq!(
-        success_json(&closed),
-        json!({"number": 42, "state": "closed"})
-    );
+    let closed = success_json(&closed);
+    assert_eq!(closed["number"], 42);
+    assert_eq!(closed["state"], "closed");
+    assert_eq!(gh_input(&fixture), "bye");
 
-    let reopened = fixture.run_pr(&["pr", "reopen", "42", "--comment", "back"], "");
-    assert_eq!(
-        success_json(&reopened),
-        json!({"number": 42, "state": "open"})
+    let reopened = fixture.run_pr(
+        &["pr", "edit", "42", "--state", "open", "--comment", "back"],
+        "",
     );
+    let reopened = success_json(&reopened);
+    assert_eq!(reopened["number"], 42);
+    assert_eq!(reopened["state"], "open");
+    assert_eq!(gh_input(&fixture), "back");
 
     let lines = gh_lines(&fixture);
     assert!(lines.contains(&"pr review 42 --repo owner/repo --approve --body-file -".to_string()));
@@ -644,8 +749,70 @@ fn review_merge_ready_close_and_reopen_use_the_gh_commands() {
     );
     assert!(lines.contains(&"pr ready 42 --repo owner/repo".to_string()));
     assert!(lines.contains(&"pr ready 42 --repo owner/repo --undo".to_string()));
-    assert!(lines.contains(&"pr close 42 --repo owner/repo -c bye --delete-branch".to_string()));
-    assert!(lines.contains(&"pr reopen 42 --repo owner/repo -c back".to_string()));
+    assert!(lines.contains(&"pr close 42 --repo owner/repo --delete-branch".to_string()));
+    assert!(lines.contains(&"pr reopen 42 --repo owner/repo".to_string()));
+    assert!(lines.contains(&"pr comment 42 --repo owner/repo --body-file -".to_string()));
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.starts_with("pr close 42") && line.contains("--comment"))
+    );
+
+    // Each state edit fetches the pull request, applies the transition, comments on stdin, then
+    // reads back once: the pre-transition read, close, comment and final read keep that order, and
+    // the reopen phase repeats it.
+    let position = |expected: &str| {
+        lines
+            .iter()
+            .position(|line| line.as_str() == expected)
+            .unwrap_or_else(|| panic!("missing invocation: {expected}"))
+    };
+    let views: Vec<_> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.starts_with("pr view 42 "))
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(
+        views.len(),
+        4,
+        "each edit fetches before and after its transition"
+    );
+    let close = position("pr close 42 --repo owner/repo --delete-branch");
+    let comment = position("pr comment 42 --repo owner/repo --body-file -");
+    let reopen = position("pr reopen 42 --repo owner/repo");
+    assert!(views[0] < close && close < comment && comment < views[1]);
+    assert!(views[2] < reopen && reopen < views[3]);
+
+    // A transition comment and a branch deletion both require an explicit state.
+    fs::remove_file(&fixture.log).expect("clear gh argument log");
+    let orphan_comment = fixture.run_pr(&["pr", "edit", "42", "--comment", "orphan"], "");
+    assert_eq!(error_json(&orphan_comment)["code"], "invalid_input");
+    let orphan_delete = fixture.run_pr(&["pr", "edit", "42", "--delete-branch"], "");
+    assert_eq!(error_json(&orphan_delete)["code"], "invalid_input");
+    assert!(!fixture.log.exists());
+}
+
+// RF-PR.10: a merged pull request rejects an explicit state request before any write.
+#[test]
+fn merged_pull_request_state_edit_fails_before_any_write() {
+    let fixture = Fixture::new();
+    let output = fixture.run_pr(
+        &["pr", "edit", "42", "--state", "open", "--comment", "reopen"],
+        "pr-merged",
+    );
+    assert_eq!(error_json(&output)["code"], "invalid_input");
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("private provider diagnostic"));
+
+    let lines = gh_lines(&fixture);
+    assert!(lines.contains(&"pr view 42 --repo owner/repo --json number,title,body,state,isDraft,url,baseRefName,headRefName,author,createdAt,updatedAt,mergedAt,mergeable,reviewDecision,labels,assignees".to_string()));
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.starts_with("pr close 42") || line.starts_with("pr reopen 42"))
+    );
+    assert!(!lines.iter().any(|line| line.starts_with("pr edit 42")));
+    assert!(!lines.iter().any(|line| line.starts_with("pr comment 42")));
 }
 
 // RF-PR.7: Configured merge defaults apply only when omitted and preserve the explicit CLI method.
@@ -709,6 +876,247 @@ fn review_without_an_event_is_a_usage_error() {
     let output = fixture.run_pr(&["pr", "review", "42"], "");
     assert_eq!(output.status.code(), Some(2));
     assert!(!fixture.log.exists());
+}
+
+// RF-PR.6: a summary-only review keeps the native command and never touches the review API.
+#[test]
+fn summary_only_review_uses_the_native_command() {
+    let fixture = Fixture::new();
+    let approved = fixture.run_pr(
+        &["pr", "review", "42", "--approve", "--body", "Looks good"],
+        "",
+    );
+    assert_eq!(
+        success_json(&approved),
+        json!({"number": 42, "event": "approve"})
+    );
+    assert_eq!(gh_input(&fixture), "Looks good");
+    let lines = gh_lines(&fixture);
+    assert!(lines.contains(&"pr review 42 --repo owner/repo --approve --body-file -".to_owned()));
+    assert!(!lines.iter().any(|line| line.starts_with("api ")));
+    assert!(!lines.iter().any(|line| line.contains("headRefOid")));
+}
+
+// RF-PR.6: inline comments travel as one review request anchored to the observed head.
+#[test]
+fn inline_review_posts_one_request_anchored_to_the_head() {
+    let fixture = Fixture::new();
+    let file = fixture.root.join("inline.txt");
+    fs::write(&file, "from file").expect("write inline body file");
+
+    let reviewed = fixture.run_pr(
+        &[
+            "pr",
+            "review",
+            "42",
+            "--approve",
+            "--body",
+            "Ship it",
+            "--inline",
+            "src/lib.rs:10",
+            "right side",
+            "--inline-file",
+            "src/a:b.rs:12:left",
+            file.to_str().expect("utf-8 path"),
+        ],
+        "review-inline",
+    );
+    assert_eq!(
+        success_json(&reviewed),
+        json!({"number": 42, "event": "approve"})
+    );
+
+    let lines = gh_lines(&fixture);
+    assert!(lines.contains(&"pr view 42 --repo owner/repo --json headRefOid".to_owned()));
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.as_str() == REVIEW_POST)
+            .count(),
+        1
+    );
+    let payload: serde_json::Value =
+        serde_json::from_str(&gh_input(&fixture)).expect("inline review payload");
+    assert_eq!(
+        payload,
+        json!({
+            "event": "APPROVE",
+            "commit_id": "9f8e7d6c5b4a3210cafebabe00112233445566",
+            "body": "Ship it",
+            "comments": [
+                {"path": "src/lib.rs", "line": 10, "side": "RIGHT", "body": "right side"},
+                {"path": "src/a:b.rs", "line": 12, "side": "LEFT", "body": "from file"},
+            ],
+        })
+    );
+}
+
+// RF-PR.6: every inline input is validated before the provider is reached.
+#[test]
+fn inline_review_validation_fails_before_provider_access() {
+    let fixture = Fixture::new();
+    for args in [
+        vec![
+            "pr",
+            "review",
+            "42",
+            "--approve",
+            "--inline",
+            "src/lib.rs:0",
+            "note",
+        ],
+        vec![
+            "pr",
+            "review",
+            "42",
+            "--approve",
+            "--inline",
+            "src/lib.rs:1:sideways",
+            "note",
+        ],
+        vec![
+            "pr",
+            "review",
+            "42",
+            "--approve",
+            "--inline",
+            "src/lib.rs:1",
+            "   ",
+        ],
+        vec![
+            "pr",
+            "review",
+            "42",
+            "--comment",
+            "--inline",
+            "src/lib.rs:1",
+            "note",
+        ],
+        vec![
+            "pr",
+            "review",
+            "42",
+            "--request-changes",
+            "--body",
+            "  ",
+            "--inline",
+            "src/lib.rs:1",
+            "note",
+        ],
+        vec![
+            "pr",
+            "review",
+            "42",
+            "--approve",
+            "--body-file",
+            "-",
+            "--inline-file",
+            "src/lib.rs:1",
+            "-",
+        ],
+    ] {
+        let output = fixture.run_pr(&args, "");
+        assert_eq!(error_json(&output)["code"], "invalid_input", "{args:?}");
+    }
+    assert!(!fixture.log.exists());
+}
+
+// RF-PR.6: each text source and the aggregate review payload are bounded.
+#[test]
+fn inline_review_sources_and_payload_are_bounded() {
+    let fixture = Fixture::new();
+    let oversized = fixture.root.join("oversized.txt");
+    fs::write(&oversized, "x".repeat(1024 * 1024 + 1)).expect("write oversized body");
+
+    let output = fixture.run_pr(
+        &[
+            "pr",
+            "review",
+            "42",
+            "--approve",
+            "--inline-file",
+            "src/lib.rs:1",
+            oversized.to_str().expect("utf-8 path"),
+        ],
+        "",
+    );
+    assert_eq!(error_json(&output)["code"], "invalid_input");
+
+    let half = fixture.root.join("half.txt");
+    fs::write(&half, "x".repeat(600 * 1024)).expect("write half-size body");
+    let output = fixture.run_pr(
+        &[
+            "pr",
+            "review",
+            "42",
+            "--approve",
+            "--body-file",
+            half.to_str().expect("utf-8 path"),
+            "--inline-file",
+            "src/lib.rs:1",
+            half.to_str().expect("utf-8 path"),
+        ],
+        "",
+    );
+    assert_eq!(error_json(&output)["code"], "invalid_input");
+    assert!(!fixture.log.exists());
+}
+
+// RF-PR.6: an unreadable head aborts before any review request is written.
+#[test]
+fn inline_review_without_a_readable_head_never_writes() {
+    let fixture = Fixture::new();
+    let output = fixture.run_pr(
+        &[
+            "pr",
+            "review",
+            "42",
+            "--approve",
+            "--inline",
+            "src/lib.rs:1",
+            "note",
+        ],
+        "review-head-missing",
+    );
+    assert_eq!(error_json(&output)["code"], "provider_response");
+    assert!(
+        !gh_lines(&fixture)
+            .iter()
+            .any(|line| line.starts_with("api "))
+    );
+}
+
+// RF-PR.6: a failed or unreadable submission is an uncertain write, never a retry.
+#[test]
+fn interrupted_inline_review_reports_an_uncertain_write_without_retrying() {
+    for mode in ["review-failure", "review-unconfirmed", "review-pending"] {
+        let fixture = Fixture::new();
+        let output = fixture.run_pr(
+            &[
+                "pr",
+                "review",
+                "42",
+                "--comment",
+                "--body",
+                "Summary",
+                "--inline",
+                "src/lib.rs:1",
+                "note",
+            ],
+            mode,
+        );
+        assert_eq!(
+            error_json(&output)["code"],
+            "github_write_uncertain",
+            "{mode}"
+        );
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("private review diagnostic"));
+        let review_posts = gh_lines(&fixture)
+            .iter()
+            .filter(|line| line.as_str() == REVIEW_POST)
+            .count();
+        assert_eq!(review_posts, 1, "{mode}");
+    }
 }
 
 #[test]
@@ -839,7 +1247,7 @@ fn pr_comment_lock_and_revert_use_native_gh_commands() {
 
     let locked = fixture.run_pr(&["pr", "lock", "42", "--reason", "too_heated"], "");
     assert_eq!(success_json(&locked)["locked"], true);
-    let unlocked = fixture.run_pr(&["pr", "unlock", "42"], "");
+    let unlocked = fixture.run_pr(&["pr", "lock", "42", "--undo"], "");
     assert_eq!(success_json(&unlocked)["locked"], false);
 
     let reverted = fixture.run_pr(

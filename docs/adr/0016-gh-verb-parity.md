@@ -1,6 +1,6 @@
 # 0016: Command verbs mirror `gh`
 
-- Status: Accepted
+- Status: Superseded for GitHub lifecycle grouping by [ADR-0035](./0035-github-command-consolidation.md)
 - Date: 2026-10-04
 - Tracker: [issue #10](https://github.com/0spura/workctl/issues/10)
 - Supersedes: [ADR-0004](./0004-workctl-rust-cli.md) for the issue verb names (`show` → `view`) and [ADR-0006](./0006-pull-request-operations.md) for the pull request verb names (`show` → `view`, `update` → `edit`). Everything else in those decisions stands.

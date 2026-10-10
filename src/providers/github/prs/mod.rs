@@ -7,7 +7,8 @@ mod write;
 use crate::domain::{AppError, CheckRun, PullRequest, PullRequestStatus, PullRequestSummary};
 use crate::process::runner;
 use crate::providers::{
-    MergeMethod, NewPr, PrChecksOptions, PrPatch, PrQuery, PullRequestProvider, ReviewEvent,
+    InlineReviewComment, MergeMethod, NewPr, PrChecksOptions, PrPatch, PrQuery,
+    PullRequestProvider, ReviewEvent,
 };
 
 pub struct GitHubPulls {
@@ -78,8 +79,13 @@ impl PullRequestProvider for GitHubPulls {
     ///
     /// The fetch provides the current body for a body change, the timestamp for the concurrency
     /// guard, and the result returned when the patch carries no field.
-    fn edit(&self, number: u64, patch: &PrPatch) -> Result<PullRequest, AppError> {
-        write::edit(self, number, patch)
+    fn edit(
+        &self,
+        number: u64,
+        patch: &PrPatch,
+        transition: Option<&crate::providers::PrTransition>,
+    ) -> Result<PullRequest, AppError> {
+        write::edit(self, number, patch, transition)
     }
 
     fn diff(&self, number: u64, name_only: bool) -> Result<String, AppError> {
@@ -90,8 +96,14 @@ impl PullRequestProvider for GitHubPulls {
         read::checks(self, number, options)
     }
 
-    fn review(&self, number: u64, event: ReviewEvent, body: Option<&str>) -> Result<(), AppError> {
-        write::review(self, number, event, body)
+    fn review(
+        &self,
+        number: u64,
+        event: ReviewEvent,
+        body: Option<&str>,
+        comments: &[InlineReviewComment],
+    ) -> Result<(), AppError> {
+        write::review(self, number, event, body, comments)
     }
 
     fn merge(
@@ -114,18 +126,6 @@ impl PullRequestProvider for GitHubPulls {
         write::set_ready(self, number, draft)
     }
 
-    fn close(
-        &self,
-        number: u64,
-        comment: Option<&str>,
-        delete_branch: bool,
-    ) -> Result<(), AppError> {
-        write::close(self, number, comment, delete_branch)
-    }
-
-    fn reopen(&self, number: u64, comment: Option<&str>) -> Result<(), AppError> {
-        write::reopen(self, number, comment)
-    }
     fn comment(&self, number: u64, body: &str) -> Result<(), AppError> {
         write::comment(self, number, body)
     }

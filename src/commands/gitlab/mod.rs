@@ -11,4 +11,3 @@ pub(super) fn execute(globals: &GlobalArgs, command: GitlabCommand) -> Result<()
         GitlabCommand::Mr(args) => mr::execute(globals, args),
     }
 }
-

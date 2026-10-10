@@ -1,3 +1,4 @@
+mod develop;
 mod mapping;
 mod read;
 mod relationships;
@@ -28,6 +29,14 @@ pub struct NativeIssueEdit {
     pub blocked_by_remove: Vec<String>,
     pub blocking_add: Vec<String>,
     pub blocking_remove: Vec<String>,
+}
+
+#[derive(Debug, Default)]
+pub struct IssueTransition {
+    pub closed: bool,
+    pub comment: Option<String>,
+    pub reason: Option<String>,
+    pub duplicate_of: Option<String>,
 }
 
 impl NativeIssueEdit {
@@ -110,6 +119,25 @@ impl GitHubIssues {
         relationships::blocker_chains(self, number)
     }
 
+    /// Creates the branch GitHub links to the issue and returns its name.
+    ///
+    /// GitHub-only: another provider has no equivalent verb, so this stays off `WorkItemProvider`
+    /// instead of forcing an unsupported implementation on every provider.
+    pub fn develop_branch(
+        &self,
+        number: u64,
+        base: Option<&str>,
+        name: Option<&str>,
+        checkout: bool,
+    ) -> Result<String, AppError> {
+        develop::create(self, number, base, name, checkout)
+    }
+
+    /// Branch names already linked to the issue.
+    pub fn linked_branches(&self, number: u64) -> Result<Vec<String>, AppError> {
+        develop::list(self, number)
+    }
+
     /// Discovers the configured Project and validates every requested field value.
     ///
     /// This performs no remote write: it queries the Project schema, rejects unknown or invalid
@@ -162,6 +190,7 @@ impl GitHubIssues {
         patch: &IssuePatch,
         native: &NativeIssueEdit,
         plan: Option<&ProjectEditPlan>,
+        transition: Option<&IssueTransition>,
     ) -> Result<Issue, AppError> {
         let body = self.fetch_for_edit(number, patch)?;
         write::edit_native(
@@ -171,6 +200,7 @@ impl GitHubIssues {
             native,
             body.as_deref(),
             plan.map(|plan| &plan.plan),
+            transition,
         )
     }
 
@@ -218,19 +248,6 @@ impl WorkItemProvider for GitHubIssues {
 
     fn show(&self, number: u64) -> Result<Issue, AppError> {
         read::show(self, number)
-    }
-    fn close(
-        &self,
-        number: u64,
-        comment: Option<&str>,
-        reason: Option<&str>,
-        duplicate_of: Option<&str>,
-    ) -> Result<(), AppError> {
-        write::close(self, number, comment, reason, duplicate_of)
-    }
-
-    fn reopen(&self, number: u64, comment: Option<&str>) -> Result<(), AppError> {
-        write::reopen(self, number, comment)
     }
 
     fn comment(&self, number: u64, body: &str) -> Result<(), AppError> {

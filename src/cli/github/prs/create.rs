@@ -1,6 +1,7 @@
 use clap::Args;
 
 use crate::cli::common;
+use crate::domain::ClosingReference;
 
 #[derive(Debug, Args)]
 pub struct CreateArgs {
@@ -22,9 +23,9 @@ pub struct CreateArgs {
     /// Open as a draft
     #[arg(long)]
     pub draft: bool,
-    /// Issue closed when the pull request merges; may be repeated
-    #[arg(long = "closes", value_name = "NUMBER", value_parser = clap::value_parser!(u64).range(1..))]
-    pub closes: Vec<u64>,
+    /// Issue closed when the pull request merges, as NUMBER or OWNER/REPO#NUMBER; may be repeated
+    #[arg(long = "closes", value_name = "NUMBER|OWNER/REPO#NUMBER")]
+    pub closes: Vec<ClosingReference>,
     /// Add an assignee; may be repeated
     #[arg(long = "assignee", value_name = "LOGIN", value_parser = common::parse_non_blank)]
     pub assignees: Vec<String>,

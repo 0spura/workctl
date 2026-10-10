@@ -5,10 +5,21 @@ mod common;
 use std::fs;
 use std::io::{BufRead, Read, Write};
 use std::net::TcpListener;
+use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 use std::thread;
 
 use common::{Fixture, error_json, success_json};
+
+/// Exact `gh` argv lines in invocation order, so an ordering assertion cannot match a prefix of a
+/// longer argument list by accident.
+fn gh_lines(fixture: &Fixture) -> Vec<String> {
+    fs::read_to_string(&fixture.log)
+        .expect("read gh argument log")
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
 
 #[test]
 fn create_list_view_and_edit_preserve_the_cli_contract() {
@@ -305,8 +316,7 @@ fn invalid_inputs_and_unsupported_provider_fail_before_gh() {
     assert_eq!(
         commands,
         [
-            "create", "list", "blockers", "view", "edit", "close", "reopen", "comment", "lock",
-            "unlock"
+            "create", "list", "blockers", "view", "edit", "comment", "lock", "develop"
         ]
     );
     assert!(!fixture.log.exists());
@@ -1207,7 +1217,10 @@ fn project_field_only_edit_reports_completed_operations_on_later_failure() {
         error["details"]["completed"],
         serde_json::json!(["Priority"])
     );
-    assert_eq!(error["details"]["pending"], serde_json::json!(["Notes"]));
+    assert_eq!(
+        error["details"]["pending"],
+        serde_json::json!(["Notes", "issue readback"])
+    );
     assert!(!String::from_utf8_lossy(&output.stderr).contains("private project diagnostic"));
     let log = fs::read_to_string(&fixture.log).unwrap();
     assert_eq!(log.matches("project item-edit").count(), 2);
@@ -1237,7 +1250,7 @@ fn project_edit_reports_issue_success_and_stops_after_field_failure() {
             "Priority",
         ];
         if let Some(title) = title {
-            args.extend(["--title", title]);
+            args.extend(["--title", title, "--state", "closed", "--comment", "Done"]);
         }
         let output = fixture.run_issue(&args, "project-edit-failure");
         let error = error_json(&output);
@@ -1246,7 +1259,13 @@ fn project_edit_reports_issue_success_and_stops_after_field_failure() {
             assert_eq!(error["details"]["completed"], completed);
             assert_eq!(
                 error["details"]["pending"],
-                serde_json::json!(["Notes", "Priority"])
+                serde_json::json!([
+                    "Notes",
+                    "Priority",
+                    "issue close",
+                    "transition comment",
+                    "issue readback"
+                ])
             );
         }
         let log = fs::read_to_string(&fixture.log).unwrap();
@@ -1673,16 +1692,59 @@ fn project_auto_edit_fails_closed_before_writes() {
         assert!(!log.contains("project item-edit"));
     }
 }
-// RF-WI.8-RF-WI.12: Native close, reopen, comments, and conversation locks.
+/// A fixture whose read-backs report the state a transition produced.
+///
+/// The shared fixture answers every read with a fixed state, so this wrapper keeps a state file,
+/// delegates every write to the shared mock unchanged, and answers only the read-back endpoint
+/// with a record carrying the tracked state.
+fn issue_lifecycle_fixture() -> Fixture {
+    let fixture = Fixture::new();
+    fs::rename(fixture.bin.join("gh"), fixture.bin.join("gh-shared"))
+        .expect("keep the shared gh mock");
+    let script = r#"#!/bin/sh
+shared="$(dirname "$WORKCTL_GH_LOG")/bin/gh-shared"
+state_file="$(dirname "$WORKCTL_GH_LOG")/issue-state"
+case "$1 $2" in
+    "issue close") printf 'CLOSED' > "$state_file" ;;
+    "issue reopen") printf 'OPEN' > "$state_file" ;;
+esac
+current="$(cat "$state_file" 2>/dev/null || printf 'OPEN')"
+if [ "$1" = "api" ]; then
+    case "$2" in
+        repos/owner/repo/issues/*)
+            number="${2##*/}"
+            printf '%s\n' "$*" >> "$WORKCTL_GH_LOG"
+            printf '%s\n' "{\"number\":$number,\"title\":\"Provider title\",\"body\":\"Provider body\",\"state\":\"$current\",\"html_url\":\"https://github.com/owner/repo/issues/$number\",\"created_at\":\"2026-01-01T00:00:00Z\",\"updated_at\":\"2026-01-02T00:00:00Z\"}"
+            exit 0
+            ;;
+    esac
+fi
+exec "$shared" "$@"
+"#;
+    let path = fixture.bin.join("gh");
+    fs::write(&path, script).expect("write stateful gh wrapper");
+    let mut permissions = fs::metadata(&path)
+        .expect("read wrapper permissions")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&path, permissions).expect("make wrapper executable");
+    fixture
+}
+
+// RF-WI.8-RF-WI.12: Native state transitions, comments, and conversation locks.
 #[test]
 fn issue_lifecycle_comments_and_conversation_lock_use_gh_native_commands() {
-    let fixture = Fixture::new();
+    let fixture = issue_lifecycle_fixture();
 
+    // A state-only edit closes through the native command, comments on stdin, and reads back once.
+    fs::write(&fixture.log, "").expect("reset gh argument log");
     let closed = fixture.run_issue(
         &[
             "issue",
-            "close",
-            "12",
+            "edit",
+            "7",
+            "--state",
+            "closed",
             "--comment",
             "Fixed",
             "--reason",
@@ -1690,47 +1752,196 @@ fn issue_lifecycle_comments_and_conversation_lock_use_gh_native_commands() {
         ],
         "",
     );
-    assert_eq!(success_json(&closed)["state"], "closed");
+    let closed = success_json(&closed);
+    assert_eq!(closed["number"], 7);
+    assert_eq!(closed["state"], "closed");
+    assert_eq!(
+        fs::read_to_string(&fixture.input).expect("read transition comment"),
+        "Fixed"
+    );
+    assert_eq!(
+        gh_lines(&fixture).join("\n"),
+        concat!(
+            "auth status --hostname github.com\n",
+            "api repos/owner/repo/issues/7\n",
+            "issue close 7 --repo owner/repo --reason completed\n",
+            "issue comment 7 --repo owner/repo --body-file -\n",
+            "api repos/owner/repo/issues/7"
+        )
+    );
 
+    // A duplicate target reaches the native close without a comment.
+    fs::write(&fixture.log, "").expect("reset gh argument log");
     let duplicate = fixture.run_issue(
         &[
             "issue",
-            "close",
-            "12",
+            "edit",
+            "7",
+            "--state",
+            "closed",
             "--duplicate-of",
             "https://github.com/owner/repo/issues/9",
         ],
         "",
     );
     assert_eq!(success_json(&duplicate)["state"], "closed");
+    assert_eq!(
+        gh_lines(&fixture).join("\n"),
+        concat!(
+            "auth status --hostname github.com\n",
+            "api repos/owner/repo/issues/7\n",
+            "issue close 7 --repo owner/repo --duplicate-of https://github.com/owner/repo/issues/9\n",
+            "api repos/owner/repo/issues/7"
+        )
+    );
 
-    let reopened = fixture.run_issue(&["issue", "reopen", "12", "--comment", "Reopened"], "");
+    // Reopening reopens first and posts the stdin comment afterwards.
+    fs::write(&fixture.log, "").expect("reset gh argument log");
+    let reopened = fixture.run_issue(
+        &[
+            "issue",
+            "edit",
+            "7",
+            "--state",
+            "open",
+            "--comment",
+            "Reopened",
+        ],
+        "",
+    );
     assert_eq!(success_json(&reopened)["state"], "open");
+    assert_eq!(
+        fs::read_to_string(&fixture.input).expect("read transition comment"),
+        "Reopened"
+    );
+    assert_eq!(
+        gh_lines(&fixture).join("\n"),
+        concat!(
+            "auth status --hostname github.com\n",
+            "api repos/owner/repo/issues/7\n",
+            "issue reopen 7 --repo owner/repo\n",
+            "issue comment 7 --repo owner/repo --body-file -\n",
+            "api repos/owner/repo/issues/7"
+        )
+    );
 
-    let comment = fixture.run_issue(&["issue", "comment", "12", "--body", "Comment body"], "");
+    let comment = fixture.run_issue(&["issue", "comment", "7", "--body", "Comment body"], "");
     assert_eq!(success_json(&comment)["target"], "issue");
     assert_eq!(
         fs::read_to_string(&fixture.input).expect("read comment input"),
         "Comment body"
     );
 
-    let locked = fixture.run_issue(&["issue", "lock", "12", "--reason", "resolved"], "");
+    let locked = fixture.run_issue(&["issue", "lock", "7", "--reason", "resolved"], "");
     assert_eq!(success_json(&locked)["locked"], true);
-    let unlocked = fixture.run_issue(&["issue", "unlock", "12"], "");
+    let unlocked = fixture.run_issue(&["issue", "lock", "7", "--undo"], "");
     assert_eq!(success_json(&unlocked)["locked"], false);
 
     let log = fs::read_to_string(&fixture.log).expect("read gh arguments");
-    assert!(log.contains("issue close 12 --repo owner/repo --comment Fixed --reason completed"));
-    assert!(log.contains(
-        "issue close 12 --repo owner/repo --duplicate-of https://github.com/owner/repo/issues/9"
-    ));
-    assert!(log.contains("issue reopen 12 --repo owner/repo --comment Reopened"));
-    assert!(log.contains("issue comment 12 --repo owner/repo --body-file -"));
-    assert!(log.contains("issue lock 12 --repo owner/repo --reason resolved"));
-    assert!(log.contains("issue unlock 12 --repo owner/repo"));
+    assert!(log.contains("issue comment 7 --repo owner/repo --body-file -"));
+    assert!(log.contains("issue lock 7 --repo owner/repo --reason resolved"));
+    assert!(log.contains("issue unlock 7 --repo owner/repo"));
 
-    let invalid = fixture.run_issue(&["issue", "comment", "12"], "");
+    let invalid = fixture.run_issue(&["issue", "comment", "7"], "");
     assert_eq!(error_json(&invalid)["code"], "invalid_input");
-    let invalid_lock = fixture.run_issue(&["issue", "lock", "12", "--reason", "unknown"], "");
+    let invalid_lock = fixture.run_issue(&["issue", "lock", "7", "--reason", "unknown"], "");
     assert!(!invalid_lock.status.success());
+
+    // Transition modifiers that need `--state` and conflicting lock flags fail before provider access.
+    fs::remove_file(&fixture.log).expect("clear gh argument log");
+    let orphan_comment = fixture.run_issue(&["issue", "edit", "7", "--comment", "orphan"], "");
+    assert_eq!(error_json(&orphan_comment)["code"], "invalid_input");
+    let orphan_reason = fixture.run_issue(
+        &[
+            "issue",
+            "edit",
+            "7",
+            "--state",
+            "open",
+            "--reason",
+            "completed",
+        ],
+        "",
+    );
+    assert_eq!(error_json(&orphan_reason)["code"], "invalid_input");
+    let conflicting_lock = fixture.run_issue(
+        &["issue", "lock", "7", "--undo", "--reason", "resolved"],
+        "",
+    );
+    assert_eq!(conflicting_lock.status.code(), Some(2));
+    assert!(!fixture.log.exists());
+}
+
+/// RF-WI.13: linked branches are created on the remote and reported by name.
+#[test]
+fn develop_creates_and_lists_linked_branches() {
+    let fixture = Fixture::new();
+    let created = fixture.run_issue(
+        &[
+            "issue",
+            "develop",
+            "7",
+            "--name",
+            "feature-x",
+            "--base",
+            "main",
+            "--checkout",
+        ],
+        "",
+    );
+    let created = success_json(&created);
+    assert_eq!(created["number"], 7);
+    assert_eq!(created["branch"], "feature-x");
+
+    let listed = fixture.run_issue(&["issue", "develop", "7", "--list"], "");
+    let listed = success_json(&listed);
+    assert_eq!(listed["number"], 7);
+    assert_eq!(listed["branches"][0], "feature-x");
+    assert_eq!(listed["branches"][1], "feature-y");
+
+    let text = fixture.run_issue(&["issue", "develop", "7", "--list", "--format", "text"], "");
+    assert!(text.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&text.stdout),
+        "issue #7 linked branches:\nfeature-x\nfeature-y\n"
+    );
+
+    let lines = gh_lines(&fixture);
+    assert!(
+        lines.contains(
+            &"issue develop 7 --repo owner/repo --base main --name feature-x --checkout"
+                .to_string()
+        ),
+        "actual gh calls: {lines:?}"
+    );
+    assert!(lines.contains(&"issue develop 7 --repo owner/repo --list".to_string()));
+
+    let failure = fixture.run_issue(
+        &["issue", "develop", "7", "--name", "feature-x"],
+        "develop-failure",
+    );
+    assert_eq!(error_json(&failure)["code"], "github_cli");
+
+    // `--list` reports instead of creating, so the creating flags conflict with it.
+    let conflicting = fixture.run_issue(
+        &["issue", "develop", "7", "--list", "--name", "feature-x"],
+        "",
+    );
+    assert_eq!(conflicting.status.code(), Some(2));
+}
+
+// RF-WI.13: output that carries no branch reference is a provider error, not an invented name.
+#[test]
+fn develop_reports_unreadable_provider_output() {
+    let fixture = Fixture::new();
+    let create = fixture.run_issue(
+        &["issue", "develop", "7", "--name", "feature-x"],
+        "develop-unreadable-create",
+    );
+    assert_eq!(error_json(&create)["code"], "provider_response");
+    assert!(create.stdout.is_empty());
+
+    let list = fixture.run_issue(&["issue", "develop", "7", "--list"], "develop-unreadable-list");
+    assert_eq!(error_json(&list)["code"], "provider_response");
+    assert!(list.stdout.is_empty());
 }

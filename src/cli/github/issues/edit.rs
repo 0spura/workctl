@@ -1,6 +1,6 @@
 use clap::Args;
 
-use crate::cli::common::{self, BodyChangeArgs};
+use crate::cli::common::{self, BodyChangeArgs, LifecycleState};
 
 use super::references::IssueReference;
 
@@ -117,4 +117,16 @@ pub struct EditArgs {
         value_delimiter = ','
     )]
     pub blocking_remove: Vec<IssueReference>,
+    /// Set issue state after other edits
+    #[arg(long, value_enum)]
+    pub state: Option<LifecycleState>,
+    /// Comment on the state transition
+    #[arg(long, value_parser = common::parse_non_blank)]
+    pub comment: Option<String>,
+    /// Close reason; requires --state closed
+    #[arg(long, value_parser = ["completed", "not planned", "duplicate"])]
+    pub reason: Option<String>,
+    /// Duplicate target; requires --state closed
+    #[arg(long = "duplicate-of")]
+    pub duplicate_of: Option<IssueReference>,
 }

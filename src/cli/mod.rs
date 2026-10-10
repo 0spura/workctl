@@ -130,4 +130,3 @@ pub fn prescan_value(argv: &[OsString], name: &str) -> Option<String> {
     }
     found
 }
-

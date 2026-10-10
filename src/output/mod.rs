@@ -46,6 +46,14 @@ pub enum SuccessOutput {
         number: u64,
         state: String,
     },
+    LinkedBranch {
+        number: u64,
+        branch: String,
+    },
+    LinkedBranches {
+        number: u64,
+        branches: Vec<String>,
+    },
     Comment {
         number: u64,
         target: String,

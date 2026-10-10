@@ -8,6 +8,7 @@ const SHOW_FIELDS: &str = "number,title,body,state,isDraft,url,baseRefName,headR
 const STATUS_FIELDS: &str =
     "number,title,state,isDraft,url,baseRefName,headRefName,mergeable,reviewDecision";
 const LIST_FIELDS: &str = "number,title,state,isDraft,url,baseRefName,headRefName,updatedAt";
+const HEAD_SHA_FIELDS: &str = "headRefOid";
 const CHECK_FIELDS: &str = "name,state,bucket,description,link,workflow";
 
 const PR_CHECKS_WATCH_DEADLINE: Duration = Duration::from_secs(600);
@@ -90,6 +91,24 @@ pub(super) fn status(
         return Err(AppError::not_pull_request());
     }
     mapping::pull_request_status(&output.stdout)
+}
+
+/// Reads the current head commit of a pull request, so a review can anchor to it.
+pub(super) fn head_sha(provider: &GitHubPulls, number: u64) -> Result<String, AppError> {
+    let args = [
+        "pr".to_owned(),
+        "view".to_owned(),
+        number.to_string(),
+        "--repo".to_owned(),
+        provider.repo.clone(),
+        "--json".to_owned(),
+        HEAD_SHA_FIELDS.to_owned(),
+    ];
+    let output = provider.run_gh_raw(&args, None)?;
+    if !output.success {
+        return Err(AppError::not_pull_request());
+    }
+    mapping::head_sha(&output.stdout)
 }
 
 pub(super) fn diff(

@@ -168,6 +168,24 @@ if [ "$1" = "api" ]; then
     fi
     if [ "$2" = "--method" ]; then
         cat > "$WORKCTL_GH_INPUT"
+        case "$*" in
+            *pulls/42/reviews*)
+                if [ "$WORKCTL_GH_MODE" = "review-failure" ]; then
+                    printf '%s\n' 'private review diagnostic' >&2
+                    exit 1
+                fi
+                if [ "$WORKCTL_GH_MODE" = "review-unconfirmed" ]; then
+                    printf '%s\n' '{}'
+                    exit 0
+                fi
+                if [ "$WORKCTL_GH_MODE" = "review-pending" ]; then
+                    printf '%s\n' '{"id":4242,"state":"PENDING"}'
+                    exit 0
+                fi
+                printf '%s\n' '{"id":4242,"state":"APPROVED","commit_id":"9f8e7d6c5b4a3210cafebabe00112233445566"}'
+                exit 0
+                ;;
+        esac
     fi
     if [ "$WORKCTL_GH_MODE" = "pull-request" ]; then
         printf '%s\n' '{"number":7,"title":"Not an issue","body":null,"state":"OPEN","html_url":"https://github.com/owner/repo/pull/7","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z","pull_request":{}}'
@@ -176,6 +194,29 @@ if [ "$1" = "api" ]; then
     else
         printf '%s\n' '{"number":7,"title":"Provider title","body":"Provider body\n\n## Notes\n\noriginal notes","state":"OPEN","html_url":"https://github.com/owner/repo/issues/7","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z"}'
     fi
+    exit 0
+fi
+if [ "$1" = "issue" ] && [ "$2" = "develop" ]; then
+    if [ "$WORKCTL_GH_MODE" = "develop-failure" ]; then
+        printf '%s\n' 'private provider diagnostic' >&2
+        exit 1
+    fi
+    if [ "$WORKCTL_GH_MODE" = "develop-unreadable-create" ]; then
+        printf '%s\n' 'created branch feature-x'
+        exit 0
+    fi
+    case "$*" in
+        *"--list"*)
+            if [ "$WORKCTL_GH_MODE" = "develop-unreadable-list" ]; then
+                printf 'feat\377x\turl\n'
+                exit 0
+            fi
+            printf '%s\n' 'feature-x	https://github.com/owner/repo/tree/feature-x'
+            printf '%s\n' 'feature-y	https://github.com/owner/repo/tree/feature-y'
+            exit 0
+            ;;
+    esac
+    printf '%s\n' 'github.com/owner/repo/tree/feature-x'
     exit 0
 fi
 if [ "$1" = "issue" ]; then
@@ -197,9 +238,27 @@ if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
     exit 0
 fi
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+    case "$WORKCTL_GH_MODE" in
+        review-inline|review-failure|review-unconfirmed|review-pending)
+            printf '%s\n' '{"headRefOid":"9f8e7d6c5b4a3210cafebabe00112233445566"}'
+            exit 0
+            ;;
+        review-head-missing)
+            printf '%s\n' '{}'
+            exit 0
+            ;;
+    esac
     if [ "$WORKCTL_GH_MODE" = "pr-view-failure" ]; then
         printf '%s\n' 'no pull requests found for branch' >&2
         exit 1
+    fi
+    if [ "$WORKCTL_GH_MODE" = "pr-merged" ]; then
+        printf '%s\n' '{"number":42,"title":"Merged change","body":"PR body","state":"MERGED","isDraft":false,"url":"https://github.com/owner/repo/pull/42","baseRefName":"main","headRefName":"feature-x","author":{"login":"octocat"},"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-02T00:00:00Z","mergedAt":"2026-01-02T00:00:00Z","mergeable":"UNKNOWN","reviewDecision":"","labels":[],"assignees":[]}'
+        exit 0
+    fi
+    if [ "$WORKCTL_GH_MODE" = "pr-body-closes" ]; then
+        printf '%s\n' '{"number":42,"title":"Add pull requests","body":"PR body\n\nCloses #7\nFixes other/repo#6\nSee #9 for context","state":"OPEN","isDraft":false,"url":"https://github.com/owner/repo/pull/42","baseRefName":"main","headRefName":"feature-x","author":{"login":"octocat"},"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-02T00:00:00Z","mergedAt":"","mergeable":"MERGEABLE","reviewDecision":"","labels":[],"assignees":[]}'
+        exit 0
     fi
     printf '%s\n' '{"number":42,"title":"Add pull requests","body":"PR body","state":"OPEN","isDraft":false,"url":"https://github.com/owner/repo/pull/42","baseRefName":"main","headRefName":"feature-x","author":{"login":"octocat"},"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-02T00:00:00Z","mergedAt":"","mergeable":"MERGEABLE","reviewDecision":"","labels":[{"name":"bug"}],"assignees":[{"login":"hubot"}]}'
     exit 0

@@ -1,6 +1,7 @@
 use clap::Args;
 
-use crate::cli::common::{self, BodyChangeArgs};
+use crate::cli::common::{self, BodyChangeArgs, LifecycleState};
+use crate::domain::ClosingReference;
 
 use super::shared::PrNumber;
 
@@ -19,6 +20,12 @@ pub struct EditArgs {
     pub title: Option<String>,
     #[command(flatten)]
     pub change: BodyChangeArgs,
+    /// Issue closed when the pull request merges, as NUMBER or OWNER/REPO#NUMBER; may be repeated
+    #[arg(long = "closes", value_name = "NUMBER|OWNER/REPO#NUMBER")]
+    pub closes: Vec<ClosingReference>,
+    /// Remove a closing reference from the body, as NUMBER or OWNER/REPO#NUMBER; may be repeated
+    #[arg(long = "remove-closes", value_name = "NUMBER|OWNER/REPO#NUMBER")]
+    pub remove_closes: Vec<ClosingReference>,
     /// Change the base branch
     #[arg(long)]
     pub base: Option<String>,
@@ -59,4 +66,13 @@ pub struct EditArgs {
     /// Refuse the write unless the pull request's updated_at matches this value
     #[arg(long = "expect-updated-at", value_name = "TIMESTAMP")]
     pub expect_updated_at: Option<String>,
+    /// Set pull-request state after other edits
+    #[arg(long, value_enum)]
+    pub state: Option<LifecycleState>,
+    /// Comment on the state transition
+    #[arg(long, value_parser = common::parse_non_blank)]
+    pub comment: Option<String>,
+    /// Delete the local and remote branch after closing
+    #[arg(long = "delete-branch")]
+    pub delete_branch: bool,
 }

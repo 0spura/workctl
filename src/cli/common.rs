@@ -2,6 +2,18 @@ use std::str::FromStr;
 
 use clap::Args;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum LifecycleState {
+    Open,
+    Closed,
+}
+
+impl LifecycleState {
+    pub fn is_closed(self) -> bool {
+        matches!(self, Self::Closed)
+    }
+}
+
 /// Body-change flags shared by `issue edit` and `pr edit`.
 ///
 /// The item is fetched once, the change is applied to that text, and one write is sent, so a

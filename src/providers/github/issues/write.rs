@@ -1,5 +1,5 @@
 use crate::domain::{AppError, Issue};
-use crate::providers::github::issues::{GitHubIssues, NativeIssueEdit, read};
+use crate::providers::github::issues::{GitHubIssues, IssueTransition, NativeIssueEdit, read};
 use crate::providers::{IssuePatch, NewIssue};
 
 pub(super) fn create(
@@ -114,15 +114,10 @@ pub(super) fn create(
     read::show(provider, number)
 }
 
-/// Applies an issue edit — the generic patch plus the native fields — together with any
-/// validated Project field changes.
+/// Applies native issue fields, Project changes, optional state transition and comment in order.
 ///
-/// The issue-level change is written first, then every Project field serially, then the issue is
-/// read back. A field-only edit never calls `gh issue edit`, so it cannot send a no-op issue
-/// update. The remote writes are not transactional and are never retried: a failure before any
-/// completed operation returns its own error, while a failure after one returns `partial_success`
-/// naming the completed and pending operations. The `updated_at` guard covers the issue edit
-/// only; Project field changes are not part of the issue revision.
+/// Each successful write is recorded. Later failures stop without rollback or retry and return a
+/// partial-success error. The final record is read only after all requested writes complete.
 pub(super) fn edit_native(
     provider: &GitHubIssues,
     number: u64,
@@ -130,57 +125,138 @@ pub(super) fn edit_native(
     native: &NativeIssueEdit,
     body: Option<&str>,
     plan: Option<&super::super::projects::ProjectPlan>,
+    transition: Option<&IssueTransition>,
 ) -> Result<Issue, AppError> {
     let mut completed = Vec::new();
+    let issue_url = canonical_issue_url(&provider.repo, number);
     if has_issue_writes(patch, native) {
         edit_issue(provider, number, patch, native, body)?;
         completed.push("issue edit".to_owned());
     }
-    let Some(plan) = plan else {
-        return read::show(provider, number).map_err(|error| {
-            if completed.is_empty() {
-                error
-            } else {
-                AppError::partial_success(
-                    serde_json::json!({
-                        "type": "issue", "number": number,
-                        "url": canonical_issue_url(&provider.repo, number),
-                    }),
-                    &completed,
-                    &["issue readback".to_owned()],
-                )
+    if let Some(plan) = plan {
+        let mut applied = Vec::with_capacity(plan.assignments.len());
+        if let Err(error) = super::super::projects::set_fields(plan, &issue_url, &mut applied) {
+            if completed.is_empty() && applied.is_empty() {
+                return Err(error);
             }
-        });
-    };
-    let issue_url = canonical_issue_url(&provider.repo, number);
-    let mut applied = Vec::with_capacity(plan.assignments.len());
-    if let Err(error) = super::super::projects::set_fields(plan, &issue_url, &mut applied) {
-        if completed.is_empty() && applied.is_empty() {
-            return Err(error);
+            let mut pending = super::super::projects::pending(plan, applied.len());
+            if let Some(transition) = transition {
+                pending.push(if transition.closed {
+                    "issue close".to_owned()
+                } else {
+                    "issue reopen".to_owned()
+                });
+                if transition.comment.is_some() {
+                    pending.push("transition comment".to_owned());
+                }
+            }
+            pending.push("issue readback".to_owned());
+            completed.extend(applied);
+            return Err(partial_issue_error(
+                number, &issue_url, &plan.url, &completed, &pending,
+            ));
         }
-        let pending = super::super::projects::pending(plan, applied.len());
         completed.extend(applied);
-        return Err(partial_issue_error(
-            number, &issue_url, &plan.url, &completed, &pending,
-        ));
     }
-    completed.extend(applied);
+    if let Some(transition) = transition {
+        let state_operation = if transition.closed {
+            close(
+                provider,
+                number,
+                transition.reason.as_deref(),
+                transition.duplicate_of.as_deref(),
+            )
+        } else {
+            reopen(provider, number)
+        };
+        let state_name = if transition.closed {
+            "issue close"
+        } else {
+            "issue reopen"
+        };
+        if state_operation.is_err() {
+            let failure = AppError::github_write_uncertain();
+            if completed.is_empty() {
+                return Err(failure);
+            }
+            let mut pending = vec![state_name];
+            if transition.comment.is_some() {
+                pending.push("transition comment");
+            }
+            pending.push("issue readback");
+            return Err(partial_issue_transition_error(
+                number, &issue_url, &completed, &pending, &failure,
+            ));
+        }
+        completed.push(state_name.to_owned());
+        if let Some(transition_comment) = transition.comment.as_deref() {
+            if comment(provider, number, transition_comment).is_err() {
+                let failure = AppError::github_write_uncertain();
+                return Err(partial_issue_transition_error(
+                    number,
+                    &issue_url,
+                    &completed,
+                    &["transition comment", "issue readback"],
+                    &failure,
+                ));
+            }
+            completed.push("transition comment".to_owned());
+        }
+    }
     read::show(provider, number).map_err(|_| {
-        partial_issue_error(
-            number,
-            &issue_url,
-            &plan.url,
-            &completed,
-            &["issue readback".to_owned()],
-        )
+        if completed.is_empty() {
+            AppError::provider_response()
+        } else {
+            partial_issue_transition_error(
+                number,
+                &issue_url,
+                &completed,
+                &["issue readback"],
+                &AppError::provider_response(),
+            )
+        }
     })
+}
+
+fn partial_issue_transition_error(
+    number: u64,
+    issue_url: &str,
+    completed: &[String],
+    pending: &[&str],
+    failure: &AppError,
+) -> AppError {
+    let mut error = AppError::partial_success(
+        serde_json::json!({
+            "type": "issue",
+            "number": number,
+            "url": issue_url,
+        }),
+        completed,
+        &pending
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect::<Vec<_>>(),
+    );
+    error.details = Some(serde_json::json!({
+        "resource": {
+            "type": "issue",
+            "number": number,
+            "url": issue_url,
+        },
+        "completed": completed,
+        "pending": pending,
+        "failure": {
+            "code": failure.code,
+            "details": failure.details,
+        }
+    }));
+    error
 }
 
 /// Closes an issue and forwards only the explicitly requested native close options.
 pub(super) fn close(
     provider: &GitHubIssues,
     number: u64,
-    comment: Option<&str>,
     reason: Option<&str>,
     duplicate_of: Option<&str>,
 ) -> Result<(), AppError> {
@@ -191,9 +267,6 @@ pub(super) fn close(
         "--repo".to_owned(),
         provider.repo.clone(),
     ];
-    if let Some(comment) = comment {
-        args.extend(["--comment".to_owned(), comment.to_owned()]);
-    }
     if let Some(reason) = reason {
         args.extend(["--reason".to_owned(), reason.to_owned()]);
     }
@@ -204,21 +277,14 @@ pub(super) fn close(
     Ok(())
 }
 
-pub(super) fn reopen(
-    provider: &GitHubIssues,
-    number: u64,
-    comment: Option<&str>,
-) -> Result<(), AppError> {
-    let mut args = vec![
+pub(super) fn reopen(provider: &GitHubIssues, number: u64) -> Result<(), AppError> {
+    let args = vec![
         "issue".to_owned(),
         "reopen".to_owned(),
         number.to_string(),
         "--repo".to_owned(),
         provider.repo.clone(),
     ];
-    if let Some(comment) = comment {
-        args.extend(["--comment".to_owned(), comment.to_owned()]);
-    }
     provider.run_gh(&args, None)?;
     Ok(())
 }

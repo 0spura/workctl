@@ -2,7 +2,7 @@ use crate::cli::GlobalArgs;
 use crate::cli::github::issues::{EditArgs, IssueReference};
 use crate::domain::{AppError, DecisionCandidate};
 use crate::output::SuccessOutput;
-use crate::providers::github::issues::{GitHubIssues, NativeIssueEdit};
+use crate::providers::github::issues::{GitHubIssues, IssueTransition, NativeIssueEdit};
 use crate::providers::{IssuePatch, WorkItemProvider, resolve_body_change};
 
 use crate::commands::support;
@@ -11,6 +11,16 @@ use super::shared::filter_label_catalog;
 use crate::commands::labels::{AUTO_LABEL_THRESHOLD, automatic_label_names};
 
 pub(super) fn execute(globals: &GlobalArgs, args: EditArgs) -> Result<SuccessOutput, AppError> {
+    if args.comment.is_some() && args.state.is_none() {
+        return Err(AppError::invalid_input("--comment requires --state"));
+    }
+    if (args.reason.is_some() || args.duplicate_of.is_some())
+        && args.state != Some(crate::cli::common::LifecycleState::Closed)
+    {
+        return Err(AppError::invalid_input(
+            "--reason and --duplicate-of require --state closed",
+        ));
+    }
     let url_repo = args
         .targets
         .iter()
@@ -37,6 +47,12 @@ pub(super) fn execute(globals: &GlobalArgs, args: EditArgs) -> Result<SuccessOut
             numbers.push(target.number);
         }
     }
+    let transition = args.state.map(|state| IssueTransition {
+        closed: state.is_closed(),
+        comment: args.comment,
+        reason: args.reason,
+        duplicate_of: args.duplicate_of.map(IssueReference::into_argument),
+    });
     let native = NativeIssueEdit {
         issue_type: args.issue_type,
         remove_type: args.remove_type,
@@ -91,7 +107,8 @@ pub(super) fn execute(globals: &GlobalArgs, args: EditArgs) -> Result<SuccessOut
         || !args.attachments.is_empty()
         || fields.iter().any(|(_, value)| value != "@auto")
         || !clears.is_empty()
-        || !native.is_empty();
+        || !native.is_empty()
+        || transition.is_some();
     if !other_changes && !automatic && !automatic_fields {
         return Err(AppError::invalid_input("edit requires a field to change"));
     }
@@ -207,6 +224,7 @@ pub(super) fn execute(globals: &GlobalArgs, args: EditArgs) -> Result<SuccessOut
                 &patch,
                 &native,
                 plan.as_ref().filter(|plan| plan.has_writes()),
+                transition.as_ref(),
             )
         })();
         if model.is_some() {
