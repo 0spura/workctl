@@ -286,14 +286,16 @@ Edit regressions `project_auto_edit_selects_only_requested_fields_and_preserves_
 ### RF-PR.7: Merge a pull request
 **Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.1, RF-CFG.2, RF-CFG.4
 
-- `pr merge NUMBER` merges the pull request; `--method merge|squash|rebase` selects the method, `--delete-branch` deletes the local and remote branch after merging, and `--auto` queues the merge once the repository requirements are met.
+- `pr merge NUMBER` merges the pull request; `--method merge|squash|rebase` selects the method, `--delete-branch` deletes the remote head branch after merging, and `--auto` queues the merge once the repository requirements are met.
 - Method precedence: explicit `--method`, then `defaults.github.pr.mergeMethod`, then GitHub CLI inference. With no config, behavior remains unchanged.
-- `defaults.github.pr.deleteBranch` is a boolean defaulting to `false`. `true` adds `--delete-branch` to every merge; the CLI's `--delete-branch` can enable deletion for one merge. There is no per-command inverse flag.
+- `defaults.github.pr.deleteBranch` is a boolean defaulting to `false`. `true` enables remote deletion for every merge; the CLI's `--delete-branch` can enable deletion for one merge. There is no per-command inverse flag.
+- Deletion is workctl's own `gh api --method DELETE repos/OWNER/REPO/git/refs/heads/BRANCH` call after the merge is acknowledged; the flag is never forwarded to `gh`, and no local branch is ever deleted. The head branch is read from the pull request's references and is deleted only when its head repository is the addressed repository, so a fork pull request never deletes a same-named branch here. A ref that is already gone (422 `Reference does not exist`) counts as deleted; any other deletion failure returns `partial_success` with `remote branch deletion` pending.
+- A queued merge has no branch to delete yet: `--delete-branch` together with `--auto` fails as `invalid_input` before provider access, and a configured `deleteBranch: true` is not attempted for an `--auto` invocation.
 - The result is `{ "number", "method": null|"merge"|"squash"|"rebase", "auto" }`; `method` reports the effective configured/explicit method, or null when GitHub CLI chooses.
-- Errors: `config` for malformed/unknown config values; `github_cli` when the merge call fails.
+- Errors: `config` for malformed/unknown config values; `github_cli` when the merge call fails; `invalid_input` for the `--auto` combination.
 
-**Acceptance:** An explicit method overrides the configured default; an omitted method passes the configured method or otherwise leaves choice to `gh`. `deleteBranch: false` preserves existing behavior, `true` adds `--delete-branch`, and the explicit CLI flag enables deletion when the setting is false. Configuration errors fail before provider access.
-**Verification:** `tests/cli_prs.rs` covers configured defaults and CLI method precedence; config unit tests cover valid/invalid values and false defaults.
+**Acceptance:** An explicit method overrides the configured default; an omitted method passes the configured method or otherwise leaves choice to `gh`. `deleteBranch: false` preserves existing behavior, `true` deletes the remote branch after every completed merge, and the explicit CLI flag enables deletion when the setting is false. Deletion removes one remote ref and leaves every local branch untouched; a fork head, an absent head repository, an already-deleted ref, and an `--auto` invocation never delete a branch. Configuration errors fail before provider access.
+**Verification:** `tests/cli_prs.rs` covers configured defaults, CLI method precedence, remote-only deletion, fork and already-gone refs, deletion failure as partial success, and the `--auto` rejection; config unit tests cover valid/invalid values and false defaults.
 
 ### RF-PR.8: Edit a pull request
 **Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.1, RF-CFG.2
@@ -324,7 +326,7 @@ Edit regressions `project_auto_edit_selects_only_requested_fields_and_preserves_
 **Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-PR.8, RF-CFG.1, RF-CFG.2
 
 - `pr edit NUMBER --state closed|open` changes state through native `gh pr close|reopen`; omission preserves state. Merged PRs reject an explicit state request before mutation.
-- State may be combined with ordinary edits. Ordinary fields run before the state operation; an explicitly supplied transition comment is posted last through stdin. `--delete-branch` is valid only with `--state closed`; `--comment` requires `--state`.
+- State may be combined with ordinary edits. Ordinary fields run before the state operation, which is followed by the remote branch deletion when requested; an explicitly supplied transition comment is posted last through stdin. `--delete-branch` is valid only with `--state closed`, removes only the remote head branch as defined by RF-PR.7, and `--comment` requires `--state`.
 - State-only edits are valid and do not call `gh pr edit`. A state request may be a no-op if state already matches; explicit close modifiers are still honored.
 - The sequence is nontransactional, never retried or rolled back, and returns the full PR record after success. Failure after an acknowledged write returns `partial_success` with target identity and ordered completed/pending operations. Closed-PR edit failures can occur before an accompanying reopen; workctl does not reorder writes.
 
@@ -600,7 +602,7 @@ Pull-request unlocking is now `pr lock NUMBER --undo`; there is no `pr unlock` a
 **Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.1, RF-CFG.2
 
 - `defaults.github.pr` accepts `mergeMethod` (`merge`, `squash`, or `rebase`) and boolean `deleteBranch` (default `false`).
-- Explicit `pr merge --method` overrides `mergeMethod`; otherwise the configured method is used, falling back to GitHub CLI inference. `--delete-branch` enables deletion for one invocation; a configured `deleteBranch: true` applies to every merge because no inverse CLI flag exists.
+- Explicit `pr merge --method` overrides `mergeMethod`; otherwise the configured method is used, falling back to GitHub CLI inference. `--delete-branch` enables remote branch deletion for one invocation; a configured `deleteBranch: true` applies to every completed merge because no inverse CLI flag exists, and it is not attempted for an `--auto` invocation, which queues the merge.
 - Invalid method values and unknown keys fail closed as `config` errors before provider access. Local `defaults` replaces the shared defaults object as a whole, consistent with RF-CFG.3.
 
 **Acceptance:** Valid typed defaults are applied with the precedence above; missing deleteBranch behaves as false; invalid method values and unknown config keys prevent provider access.
@@ -684,7 +686,7 @@ Pull-request unlocking is now `pr lock NUMBER --undo`; there is no `pr unlock` a
 ## 3. Non-goals for v0
 
 - Jira, local Markdown tracking, provider plugin systems, and project/board administration. Add/remove membership of an existing project is supported through GitHub CLI metadata flags.
-- Branch creation, checkout, or standalone deletion: `git` owns branch lifecycle. `--head`/`--base` select existing branches, and `--delete-branch` asks `gh` to remove a branch only after a merge or close.
+- Branch creation, checkout, or standalone deletion: `git` owns branch lifecycle. `--head`/`--base` select existing branches, and `--delete-branch` removes the remote head branch only, after a merge or close, leaving every local branch untouched.
 - Workflow automation and label/assignee/milestone administration. GitHub lifecycle state changes use `issue edit --state` and `pr edit --state`; conversation lock reversal uses `lock --undo`.
 - Inline review is limited to single diff lines; review-thread replies, multi-line ranges, file-wide comments, and comment attachments remain out of scope. `pr comment` and `issue comment` add top-level comments.
 - Listing the pull requests linked to an issue.

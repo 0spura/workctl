@@ -166,9 +166,34 @@ if [ "$1" = "api" ]; then
         printf '%s\n' '{"number":7,"title":"Provider title","body":"Provider body\n\n## Notes\n\noriginal notes","state":"OPEN","html_url":"https://github.com/owner/repo/issues/7","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z"}'
         exit 0
     fi
+    if [ "$2" = "repos/owner/repo/pulls/42" ]; then
+        case "$WORKCTL_GH_MODE" in
+            pr-fork-head)
+                printf '%s\n' '{"head":{"ref":"fork-branch","repo":{"full_name":"someone/workctl"}},"base":{"ref":"main","repo":{"full_name":"owner/repo"}}}'
+                ;;
+            pr-head-repo-gone)
+                printf '%s\n' '{"head":{"ref":"feature-x","repo":null},"base":{"ref":"main","repo":{"full_name":"owner/repo"}}}'
+                ;;
+            *)
+                printf '%s\n' '{"head":{"ref":"feature-x","repo":{"full_name":"owner/repo"}},"base":{"ref":"main","repo":{"full_name":"owner/repo"}}}'
+                ;;
+        esac
+        exit 0
+    fi
     if [ "$2" = "--method" ]; then
         cat > "$WORKCTL_GH_INPUT"
         case "$*" in
+            *git/refs/heads/*)
+                if [ "$WORKCTL_GH_MODE" = "branch-delete-missing" ]; then
+                    printf '%s\n' 'gh: Reference does not exist (HTTP 422)' >&2
+                    exit 1
+                fi
+                if [ "$WORKCTL_GH_MODE" = "branch-delete-failure" ]; then
+                    printf '%s\n' 'private provider diagnostic' >&2
+                    exit 1
+                fi
+                exit 0
+                ;;
             *pulls/42/reviews*)
                 if [ "$WORKCTL_GH_MODE" = "review-failure" ]; then
                     printf '%s\n' 'private review diagnostic' >&2

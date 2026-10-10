@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-10-08
+- Superseded by: [ADR-0037](./0037-remote-only-branch-deletion.md) for the meaning of `deleteBranch` and `--delete-branch`; the merge-method defaults below still hold.
 - Tracker: None
 
 ## Context

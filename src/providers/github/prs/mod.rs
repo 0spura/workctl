@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+mod branches;
 mod mapping;
 mod read;
 mod write;

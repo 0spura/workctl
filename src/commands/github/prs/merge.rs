@@ -13,7 +13,14 @@ pub(super) fn execute(globals: &GlobalArgs, args: MergeArgs) -> Result<SuccessOu
         .method
         .map(merge_method)
         .or_else(|| defaults.merge_method.map(configured_merge_method));
-    let delete_branch = args.delete_branch || defaults.delete_branch;
+    if args.delete_branch && args.auto {
+        return Err(AppError::invalid_input(
+            "--delete-branch cannot be combined with --auto",
+        ));
+    }
+    // A queued merge has not happened yet, so this invocation has no branch to delete; a configured
+    // default applies to merges that complete here.
+    let delete_branch = (args.delete_branch || defaults.delete_branch) && !args.auto;
     let provider = shared::provider(globals)?;
     provider.merge(args.number.0, method, delete_branch, args.auto)?;
     Ok(SuccessOutput::Merge {

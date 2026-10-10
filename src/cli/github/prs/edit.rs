@@ -72,7 +72,7 @@ pub struct EditArgs {
     /// Comment on the state transition
     #[arg(long, value_parser = common::parse_non_blank)]
     pub comment: Option<String>,
-    /// Delete the local and remote branch after closing
+    /// Delete the remote branch after closing, keeping the local branch
     #[arg(long = "delete-branch")]
     pub delete_branch: bool,
 }

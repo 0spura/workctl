@@ -26,6 +26,9 @@ fn gh_input(fixture: &Fixture) -> String {
 /// The one review-API invocation an inline review may make.
 const REVIEW_POST: &str = "api --method POST repos/owner/repo/pulls/42/reviews --input -";
 
+/// The one branch-deletion invocation: the pull request's remote head ref, with nothing local.
+const REMOTE_BRANCH_DELETE: &str = "api --method DELETE repos/owner/repo/git/refs/heads/feature-x";
+
 #[test]
 fn create_sends_the_body_and_flags_to_gh() {
     let fixture = Fixture::new();
@@ -691,15 +694,7 @@ fn review_merge_ready_close_and_reopen_use_the_gh_commands() {
     );
 
     let merged = fixture.run_pr(
-        &[
-            "pr",
-            "merge",
-            "42",
-            "--method",
-            "squash",
-            "--delete-branch",
-            "--auto",
-        ],
+        &["pr", "merge", "42", "--method", "squash", "--auto"],
         "",
     );
     assert_eq!(
@@ -743,13 +738,10 @@ fn review_merge_ready_close_and_reopen_use_the_gh_commands() {
     let lines = gh_lines(&fixture);
     assert!(lines.contains(&"pr review 42 --repo owner/repo --approve --body-file -".to_string()));
     assert!(lines.contains(&"pr review 42 --repo owner/repo --request-changes".to_string()));
-    assert!(
-        lines
-            .contains(&"pr merge 42 --repo owner/repo --squash --delete-branch --auto".to_string())
-    );
+    assert!(lines.contains(&"pr merge 42 --repo owner/repo --squash --auto".to_string()));
     assert!(lines.contains(&"pr ready 42 --repo owner/repo".to_string()));
     assert!(lines.contains(&"pr ready 42 --repo owner/repo --undo".to_string()));
-    assert!(lines.contains(&"pr close 42 --repo owner/repo --delete-branch".to_string()));
+    assert!(lines.contains(&"pr close 42 --repo owner/repo".to_string()));
     assert!(lines.contains(&"pr reopen 42 --repo owner/repo".to_string()));
     assert!(lines.contains(&"pr comment 42 --repo owner/repo --body-file -".to_string()));
     assert!(
@@ -757,6 +749,10 @@ fn review_merge_ready_close_and_reopen_use_the_gh_commands() {
             .iter()
             .any(|line| line.starts_with("pr close 42") && line.contains("--comment"))
     );
+    // Branch deletion is workctl's own API call; `gh` never receives the flag, so it can never
+    // touch a local branch.
+    assert!(lines.contains(&REMOTE_BRANCH_DELETE.to_string()));
+    assert!(!lines.iter().any(|line| line.contains("--delete-branch")));
 
     // Each state edit fetches the pull request, applies the transition, comments on stdin, then
     // reads back once: the pre-transition read, close, comment and final read keep that order, and
@@ -778,10 +774,12 @@ fn review_merge_ready_close_and_reopen_use_the_gh_commands() {
         4,
         "each edit fetches before and after its transition"
     );
-    let close = position("pr close 42 --repo owner/repo --delete-branch");
+    let close = position("pr close 42 --repo owner/repo");
+    let delete_branch = position(REMOTE_BRANCH_DELETE);
     let comment = position("pr comment 42 --repo owner/repo --body-file -");
     let reopen = position("pr reopen 42 --repo owner/repo");
-    assert!(views[0] < close && close < comment && comment < views[1]);
+    assert!(views[0] < close && close < delete_branch);
+    assert!(delete_branch < comment && comment < views[1]);
     assert!(views[2] < reopen && reopen < views[3]);
 
     // A transition comment and a branch deletion both require an explicit state.
@@ -839,6 +837,9 @@ fn merge_uses_configured_method_and_boolean_branch_default() {
         json!({"number":42,"method":"squash","auto":false})
     );
     assert!(gh_lines(&fixture).contains(&"pr merge 42 --repo owner/repo --squash".to_string()));
+    assert!(!gh_lines(&fixture)
+        .iter()
+        .any(|line| line.contains("git/refs/heads")));
 
     fs::write(
         fixture.root.join(".workctl.json"),
@@ -852,22 +853,162 @@ fn merge_uses_configured_method_and_boolean_branch_default() {
     );
     assert!(
         gh_lines(&fixture)
-            .contains(&"pr merge 42 --repo owner/repo --rebase --delete-branch".to_string())
+            .contains(&"pr merge 42 --repo owner/repo --rebase".to_string())
     );
+    assert!(gh_lines(&fixture).contains(&REMOTE_BRANCH_DELETE.to_string()));
+    assert!(!gh_lines(&fixture)
+        .iter()
+        .any(|line| line.contains("--delete-branch")));
 
     fs::write(
         fixture.root.join(".workctl.json"),
         r#"{"defaults":{"github":{"pr":{"deleteBranch":false}}}}"#,
     )
     .expect("disable configured branch deletion");
+    fs::remove_file(&fixture.log).expect("clear gh argument log");
     let explicit_delete = fixture.run_pr(&["pr", "merge", "42", "--delete-branch"], "");
     assert_eq!(
         success_json(&explicit_delete),
         json!({"number":42,"method":null,"auto":false})
     );
-    assert!(
-        gh_lines(&fixture).contains(&"pr merge 42 --repo owner/repo --delete-branch".to_string())
+    let lines = gh_lines(&fixture);
+    assert!(lines.contains(&"pr merge 42 --repo owner/repo".to_string()));
+    assert!(lines.contains(&REMOTE_BRANCH_DELETE.to_string()));
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.contains("git/refs/heads"))
+            .count(),
+        1
     );
+}
+
+// RF-PR.7, RF-PR.10: `--delete-branch` removes the remote head ref and never a local branch.
+#[test]
+fn delete_branch_removes_only_the_remote_ref() {
+    let fixture = Fixture::new();
+
+    let merged = fixture.run_pr(
+        &["pr", "merge", "42", "--method", "merge", "--delete-branch"],
+        "",
+    );
+    assert_eq!(
+        success_json(&merged),
+        json!({"number":42,"method":"merge","auto":false})
+    );
+    let lines = gh_lines(&fixture);
+    assert!(lines.contains(&"pr merge 42 --repo owner/repo --merge".to_string()));
+    assert!(lines.contains(&"api repos/owner/repo/pulls/42".to_string()));
+    assert!(lines.contains(&REMOTE_BRANCH_DELETE.to_string()));
+    assert!(!lines.iter().any(|line| line.contains("--delete-branch")));
+
+    // A fork pull request has its head branch in another repository; this repository's branch of
+    // the same name is not the one being deleted.
+    fs::remove_file(&fixture.log).expect("clear gh argument log");
+    let fork = fixture.run_pr(
+        &["pr", "edit", "42", "--state", "closed", "--delete-branch"],
+        "pr-fork-head",
+    );
+    assert_eq!(success_json(&fork)["number"], 42);
+    assert!(!gh_lines(&fixture)
+        .iter()
+        .any(|line| line.contains("git/refs/heads")));
+
+    // The head repository of a fork pull request may no longer exist.
+    fs::remove_file(&fixture.log).expect("clear gh argument log");
+    let gone = fixture.run_pr(
+        &["pr", "merge", "42", "--delete-branch"],
+        "pr-head-repo-gone",
+    );
+    assert_eq!(success_json(&gone)["number"], 42);
+    assert!(!gh_lines(&fixture)
+        .iter()
+        .any(|line| line.contains("git/refs/heads")));
+
+    // A branch that is already gone is the state deletion is trying to reach.
+    let missing = fixture.run_pr(
+        &["pr", "merge", "42", "--delete-branch"],
+        "branch-delete-missing",
+    );
+    assert_eq!(success_json(&missing)["number"], 42);
+
+    // Any other deletion failure leaves the completed merge reported as partial progress.
+    let failed = fixture.run_pr(
+        &["pr", "merge", "42", "--delete-branch"],
+        "branch-delete-failure",
+    );
+    let error = error_json(&failed);
+    assert_eq!(error["code"], "partial_success");
+    assert_eq!(error["details"]["resource"]["number"], 42);
+    assert_eq!(
+        error["details"]["completed"],
+        json!(["pull request merge"])
+    );
+    assert_eq!(
+        error["details"]["pending"],
+        json!(["remote branch deletion"])
+    );
+    assert!(!String::from_utf8_lossy(&failed.stderr).contains("private provider diagnostic"));
+
+    // The same failure after a close reports the close and lists the skipped comment as pending.
+    let close_failed = fixture.run_pr(
+        &[
+            "pr",
+            "edit",
+            "42",
+            "--state",
+            "closed",
+            "--comment",
+            "bye",
+            "--delete-branch",
+        ],
+        "branch-delete-failure",
+    );
+    let error = error_json(&close_failed);
+    assert_eq!(error["code"], "partial_success");
+    assert_eq!(
+        error["details"]["completed"],
+        json!(["pull request close"])
+    );
+    assert_eq!(
+        error["details"]["pending"],
+        json!([
+            "remote branch deletion",
+            "transition comment",
+            "pull request readback"
+        ])
+    );
+}
+
+// RF-PR.7: a queued merge has not happened, so it has no branch to delete.
+#[test]
+fn delete_branch_with_auto_is_rejected() {
+    let fixture = Fixture::new();
+    let output = fixture.run_pr(&["pr", "merge", "42", "--auto", "--delete-branch"], "");
+    assert_eq!(error_json(&output)["code"], "invalid_input");
+    assert!(!fixture.log.exists());
+
+    assert!(
+        Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&fixture.root)
+            .status()
+            .expect("initialize config test repository")
+            .success()
+    );
+    fs::write(
+        fixture.root.join(".workctl.json"),
+        r#"{"defaults":{"github":{"pr":{"deleteBranch":true}}}}"#,
+    )
+    .expect("write configured branch deletion default");
+    let queued = fixture.run_pr(&["pr", "merge", "42", "--auto"], "");
+    assert_eq!(
+        success_json(&queued),
+        json!({"number":42,"method":null,"auto":true})
+    );
+    assert!(!gh_lines(&fixture)
+        .iter()
+        .any(|line| line.contains("git/refs/heads")));
 }
 
 #[test]

@@ -156,7 +156,7 @@ pub(super) fn edit(
             "pull request reopen"
         };
         let state_operation = if transition.closed {
-            close(provider, number, transition.delete_branch)
+            close(provider, number)
         } else {
             reopen(provider, number)
         };
@@ -179,6 +179,23 @@ pub(super) fn edit(
             ));
         }
         completed.push(state_name.to_owned());
+        if transition.delete_branch {
+            if super::branches::delete_remote_branch(provider, number).is_err() {
+                let mut pending = vec!["remote branch deletion"];
+                if transition.comment.is_some() {
+                    pending.push("transition comment");
+                }
+                pending.push("pull request readback");
+                return Err(partial_pr_transition_error(
+                    &provider.repo,
+                    number,
+                    &completed,
+                    &pending,
+                    &AppError::github_write_uncertain(),
+                ));
+            }
+            completed.push("remote branch deletion".to_owned());
+        }
         if let Some(transition_comment) = transition.comment.as_deref() {
             if comment(provider, number, transition_comment).is_err() {
                 let failure = AppError::github_write_uncertain();
@@ -413,13 +430,21 @@ pub(super) fn merge(
     if let Some(method) = method {
         args.push(format!("--{}", method.as_str()));
     }
-    if delete_branch {
-        args.push("--delete-branch".to_owned());
-    }
     if auto {
         args.push("--auto".to_owned());
     }
     provider.run_gh(&args, None)?;
+    if delete_branch {
+        // The merge is complete, so the branch is no longer needed. Only the remote ref is
+        // removed: a local branch may still be checked out or carry unmerged work.
+        super::branches::delete_remote_branch(provider, number).map_err(|_| {
+            AppError::partial_success(
+                serde_json::json!({"type": "pull_request", "number": number}),
+                &["pull request merge".to_owned()],
+                &["remote branch deletion".to_owned()],
+            )
+        })?;
+    }
     Ok(())
 }
 
@@ -469,20 +494,17 @@ pub(super) fn set_ready(provider: &GitHubPulls, number: u64, draft: bool) -> Res
     Ok(())
 }
 
-/// Closes the pull request through the native command; `--delete-branch` is close-only.
+/// Closes the pull request through the native command.
 ///
 /// The transition comment never travels here: it is posted last through the stdin comment path.
-fn close(provider: &GitHubPulls, number: u64, delete_branch: bool) -> Result<(), AppError> {
-    let mut args = vec![
+fn close(provider: &GitHubPulls, number: u64) -> Result<(), AppError> {
+    let args = vec![
         "pr".to_owned(),
         "close".to_owned(),
         number.to_string(),
         "--repo".to_owned(),
         provider.repo.clone(),
     ];
-    if delete_branch {
-        args.push("--delete-branch".to_owned());
-    }
     provider.run_gh(&args, None)?;
     Ok(())
 }
