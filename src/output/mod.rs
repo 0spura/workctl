@@ -1,3 +1,4 @@
+pub mod error;
 pub mod json;
 pub mod text;
 use crate::cli::OutputFormat;
@@ -8,19 +9,110 @@ use crate::domain::{
     AppError, CheckRun, GitHubIssueView, Issue, IssueSummary, PullRequest, PullRequestStatus,
     PullRequestSummary,
 };
+#[derive(Serialize)]
+pub struct IssueMutation {
+    #[serde(flatten)]
+    pub issue: Issue,
+    #[serde(skip)]
+    pub action: MutationAction,
+    #[serde(skip)]
+    pub unchanged: bool,
+}
+
+#[derive(Serialize)]
+pub struct PullRequestMutation {
+    #[serde(flatten)]
+    pub pull_request: PullRequest,
+    #[serde(skip)]
+    pub action: MutationAction,
+    #[serde(skip)]
+    pub unchanged: bool,
+    #[serde(skip)]
+    pub gitlab: bool,
+}
+
+#[derive(Clone, Copy)]
+pub enum MutationAction {
+    Created,
+    Updated,
+    Closed,
+    Reopened,
+}
+
+pub struct GitLabData {
+    pub operation: &'static str,
+    pub number: u64,
+    pub value: serde_json::Value,
+}
+
+impl Serialize for GitLabData {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.value.serialize(serializer)
+    }
+}
+
+impl GitLabData {
+    pub fn new(operation: &'static str, number: u64, value: serde_json::Value) -> Self {
+        Self {
+            operation,
+            number,
+            value,
+        }
+    }
+}
+
+pub struct GitLabMergeRequest(pub PullRequest);
+
+impl Serialize for GitLabMergeRequest {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.0.serialize(serializer)
+    }
+}
+
+pub struct GitLabMergeRequests(pub Vec<PullRequestSummary>);
+
+impl Serialize for GitLabMergeRequests {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.0.serialize(serializer)
+    }
+}
+
+#[derive(Serialize)]
+pub struct GitLabState {
+    pub number: u64,
+    pub state: String,
+}
+
+#[derive(Serialize)]
+pub struct GitLabCheckout {
+    pub number: u64,
+}
 
 #[derive(Serialize)]
 #[serde(untagged)]
 pub enum SuccessOutput {
     Issue(Issue),
+    IssueMutation(IssueMutation),
     GitHubIssueView(GitHubIssueView),
     BlockerChains(Vec<String>),
-    IssueEdits(Vec<Issue>),
     Issues(Vec<IssueSummary>),
     PullRequest(PullRequest),
+    GitLabMergeRequest(GitLabMergeRequest),
+    PullRequestMutation(PullRequestMutation),
     PullRequestStatus(PullRequestStatus),
     PullRequests(Vec<PullRequestSummary>),
+    GitLabMergeRequests(GitLabMergeRequests),
     Checks(Vec<CheckRun>),
+    IssueMutations(Vec<IssueMutation>),
     Diff {
         number: u64,
         diff: String,
@@ -42,6 +134,7 @@ pub enum SuccessOutput {
         number: u64,
         state: String,
     },
+    GitLabState(GitLabState),
     IssueState {
         number: u64,
         state: String,
@@ -74,11 +167,12 @@ pub enum SuccessOutput {
     Checkout {
         number: u64,
     },
+    GitLabCheckout(GitLabCheckout),
     GitLabAction {
         number: u64,
         action: String,
     },
-    ProviderData(serde_json::Value),
+    GitLabData(GitLabData),
 }
 
 pub fn write(format: OutputFormat, output: &SuccessOutput) -> Result<(), AppError> {

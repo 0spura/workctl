@@ -85,7 +85,7 @@ impl PullRequestProvider for GitHubPulls {
         number: u64,
         patch: &PrPatch,
         transition: Option<&crate::providers::PrTransition>,
-    ) -> Result<PullRequest, AppError> {
+    ) -> Result<(PullRequest, bool), AppError> {
         write::edit(self, number, patch, transition)
     }
 

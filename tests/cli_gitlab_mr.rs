@@ -10,7 +10,7 @@ const PROJECT: &str = "https://gitlab.com/group/sub/project";
 #[test]
 fn gitlab_mr_create_sends_description_on_stdin_and_forwards_native_options() {
     let fixture = Fixture::new();
-    let output = fixture.run_gitlab(
+    let output = fixture.run_gitlab_json(
         &[
             "mr",
             "create",
@@ -54,11 +54,28 @@ fn gitlab_mr_create_sends_description_on_stdin_and_forwards_native_options() {
             .iter()
             .any(|call| call.contains("Native workflow details"))
     );
+    let compact_fixture = Fixture::new();
+    let compact = compact_fixture.run_gitlab(
+        &[
+            "mr",
+            "create",
+            "--title",
+            "Private details",
+            "--description",
+            "long description",
+        ],
+        "",
+    );
+    assert_eq!(
+        String::from_utf8(compact.stdout).expect("UTF-8 text output"),
+        "!6 created\n"
+    );
 }
+
 #[test]
 fn gitlab_mr_update_forwards_native_fields_and_sends_description_on_stdin() {
     let fixture = Fixture::new();
-    let output = fixture.run_gitlab(
+    let output = fixture.run_gitlab_json(
         &[
             "mr",
             "update",
@@ -94,7 +111,7 @@ fn gitlab_mr_update_forwards_native_fields_and_sends_description_on_stdin() {
 #[test]
 fn gitlab_mr_list_uses_native_filters_and_returns_summaries() {
     let fixture = Fixture::new();
-    let output = fixture.run_gitlab(
+    let output = fixture.run_gitlab_json(
         &[
             "mr",
             "list",
@@ -143,7 +160,7 @@ fn gitlab_mr_list_uses_native_filters_and_returns_summaries() {
 #[test]
 fn gitlab_mr_view_maps_native_fields_without_fabricating_github_data() {
     let fixture = Fixture::new();
-    let output = fixture.run_gitlab(&["mr", "view", "5"], "");
+    let output = fixture.run_gitlab_json(&["mr", "view", "5"], "");
     assert_eq!(
         fixture.glab_invocations().last().expect("glab invocation"),
         &format!("mr view --output json --repo {PROJECT} 5"),
@@ -169,9 +186,9 @@ fn gitlab_mr_rejects_github_grammar_before_provider_access() {
 #[test]
 fn gitlab_mr_state_changes_use_native_commands() {
     let fixture = Fixture::new();
-    let closed = fixture.run_gitlab(&["mr", "close", "5"], "");
+    let closed = fixture.run_gitlab_json(&["mr", "close", "5"], "");
     assert_eq!(success_json(&closed)["state"], "closed");
-    let reopened = fixture.run_gitlab(&["mr", "reopen", "5"], "");
+    let reopened = fixture.run_gitlab_json(&["mr", "reopen", "5"], "");
     assert_eq!(success_json(&reopened)["state"], "open");
     assert_eq!(
         fixture.glab_invocations(),
@@ -195,7 +212,7 @@ fn gitlab_mr_native_approval_and_subscription_actions_use_glab_verbs() {
         ("unsubscribe", "unsubscribe"),
         ("todo", "todo"),
     ] {
-        let output = fixture.run_gitlab(&["mr", verb, "5"], "");
+        let output = fixture.run_gitlab_json(&["mr", verb, "5"], "");
         assert_eq!(success_json(&output)["action"], result);
     }
     let invocations = fixture.glab_invocations();
@@ -214,7 +231,7 @@ fn gitlab_mr_native_approval_and_subscription_actions_use_glab_verbs() {
 #[test]
 fn gitlab_mr_native_action_failure_is_sanitized_without_success_output() {
     let fixture = Fixture::new();
-    let output = fixture.run_gitlab(&["mr", "approve", "5"], "write-failure");
+    let output = fixture.run_gitlab_json(&["mr", "approve", "5"], "write-failure");
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
@@ -225,7 +242,7 @@ fn gitlab_mr_native_action_failure_is_sanitized_without_success_output() {
 #[test]
 fn gitlab_mr_note_create_sends_body_on_stdin_to_native_glab_command() {
     let fixture = Fixture::new();
-    let output = fixture.run_gitlab(
+    let output = fixture.run_gitlab_json(
         &[
             "mr",
             "note",
@@ -253,7 +270,7 @@ fn gitlab_mr_note_create_sends_body_on_stdin_to_native_glab_command() {
 #[test]
 fn gitlab_mr_note_rejects_invalid_native_combinations_before_authentication() {
     let fixture = Fixture::new();
-    let output = fixture.run_gitlab(
+    let output = fixture.run_gitlab_json(
         &[
             "mr",
             "note",
@@ -274,9 +291,9 @@ fn gitlab_mr_note_rejects_invalid_native_combinations_before_authentication() {
 #[test]
 fn gitlab_mr_discussions_resolve_and_reopen_by_native_identifier() {
     let fixture = Fixture::new();
-    let resolved = fixture.run_gitlab(&["mr", "note", "resolve", "abcdef12", "5"], "");
+    let resolved = fixture.run_gitlab_json(&["mr", "note", "resolve", "abcdef12", "5"], "");
     assert_eq!(success_json(&resolved)["action"], "discussion resolved");
-    let reopened = fixture.run_gitlab(&["mr", "note", "reopen", "12345", "5"], "");
+    let reopened = fixture.run_gitlab_json(&["mr", "note", "reopen", "12345", "5"], "");
     assert_eq!(success_json(&reopened)["action"], "discussion reopened");
     let calls = fixture.glab_invocations();
     assert!(calls.contains(&format!("mr note resolve abcdef12 5 --repo {PROJECT}")));
@@ -285,7 +302,7 @@ fn gitlab_mr_discussions_resolve_and_reopen_by_native_identifier() {
 #[test]
 fn gitlab_mr_merge_forwards_native_options_and_reports_success() {
     let fixture = Fixture::new();
-    let output = fixture.run_gitlab(
+    let output = fixture.run_gitlab_json(
         &[
             "mr",
             "merge",
@@ -312,7 +329,7 @@ fn gitlab_mr_merge_forwards_native_options_and_reports_success() {
                 "mr merge 5 --repo {PROJECT} --auto-merge=true --message Merge feature --rebase --remove-source-branch=true --sha abc123 --squash --squash-message Squashed feature --yes"
             ))
     );
-    let explicit_defaults = fixture.run_gitlab(
+    let explicit_defaults = fixture.run_gitlab_json(
         &[
             "mr",
             "merge",
@@ -330,7 +347,7 @@ fn gitlab_mr_merge_forwards_native_options_and_reports_success() {
 #[test]
 fn gitlab_mr_diff_uses_native_command_and_raw_flag() {
     let fixture = Fixture::new();
-    let output = fixture.run_gitlab(&["mr", "diff", "5", "--raw"], "");
+    let output = fixture.run_gitlab_json(&["mr", "diff", "5", "--raw"], "");
     assert_eq!(
         fixture.glab_invocations(),
         vec![
@@ -365,7 +382,7 @@ fn gitlab_mr_checkout_changes_the_local_branch_without_force() {
     run_git(&["add", "file.txt"]);
     run_git(&["commit", "-qm", "initial"]);
 
-    let output = fixture.run_gitlab(&["mr", "checkout", "5"], "mr-checkout-git");
+    let output = fixture.run_gitlab_json(&["mr", "checkout", "5"], "mr-checkout-git");
     assert_eq!(success_json(&output)["number"], 5);
     let branch = Command::new("git")
         .args(["branch", "--show-current"])
@@ -381,18 +398,36 @@ fn gitlab_mr_checkout_changes_the_local_branch_without_force() {
 #[test]
 fn gitlab_mr_approvers_and_linked_issues_use_native_queries() {
     let fixture = Fixture::new();
-    let approvers = fixture.run_gitlab(&["mr", "approvers", "5"], "");
+    let approvers = fixture.run_gitlab_json(&["mr", "approvers", "5"], "");
+    assert_eq!(success_json(&approvers)[0]["id"], 101);
     assert_eq!(success_json(&approvers)[0]["username"], "reviewer");
-    let issues = fixture.run_gitlab(&["mr", "issues", "5"], "");
-    assert_eq!(success_json(&issues)[0]["username"], "reviewer");
+    let issues = fixture.run_gitlab_json(&["mr", "issues", "5"], "");
+    assert_eq!(success_json(&issues)[0]["iid"], 21);
+    assert_eq!(success_json(&issues)[0]["id"], 2101);
+    assert_eq!(
+        success_json(&issues)[0]["references"]["full"],
+        "group/project#21"
+    );
+    assert_eq!(success_json(&issues)[0]["title"], "Linked issue");
     let calls = fixture.glab_invocations();
     assert!(calls.contains(&format!("mr approvers 5 --repo {PROJECT} --output json")));
     assert!(calls.contains(&format!("mr issues 5 --repo {PROJECT} --output json")));
+    let text_fixture = Fixture::new();
+    let approvers = text_fixture.run_gitlab(&["mr", "approvers", "5"], "");
+    assert_eq!(
+        String::from_utf8(approvers.stdout).expect("UTF-8 text output"),
+        "!5 approver #101 reviewer\n"
+    );
+    let issues = text_fixture.run_gitlab(&["mr", "issues", "5"], "");
+    assert_eq!(
+        String::from_utf8(issues.stdout).expect("UTF-8 text output"),
+        "!5 issue group/project#21 Linked issue\n"
+    );
 }
 #[test]
 fn gitlab_mr_note_list_filters_and_update_use_native_subcommands() {
     let fixture = Fixture::new();
-    let listed = fixture.run_gitlab(
+    let listed = fixture.run_gitlab_json(
         &[
             "mr",
             "note",
@@ -408,7 +443,7 @@ fn gitlab_mr_note_list_filters_and_update_use_native_subcommands() {
         "",
     );
     assert_eq!(success_json(&listed)[0]["id"], "abcdef123456");
-    let updated = fixture.run_gitlab(
+    let updated = fixture.run_gitlab_json(
         &[
             "mr",
             "note",
@@ -427,6 +462,12 @@ fn gitlab_mr_note_list_filters_and_update_use_native_subcommands() {
         "mr note list 5 --repo {PROJECT} --output json --state unresolved --type diff --file src/lib.rs"
     )));
     assert!(calls.contains(&format!("mr note update 5 12345 --repo {PROJECT}")));
+    let text_fixture = Fixture::new();
+    let notes = text_fixture.run_gitlab(&["mr", "note", "list", "5"], "");
+    assert_eq!(
+        String::from_utf8(notes.stdout).expect("UTF-8 text output"),
+        "!5 note #abcdef123456/12345: Review note\n"
+    );
 }
 
 // RF-CFG.6: configured GitLab merge-request defaults fill the options the caller omitted.
@@ -440,7 +481,7 @@ fn rf_cfg_6_gitlab_mr_create_applies_configured_defaults() {
     )
     .expect("write GitLab merge-request defaults");
 
-    let output = fixture.run_gitlab(
+    let output = fixture.run_gitlab_json(
         &[
             "mr", "create", "--title", "Defaults", "--label", "triage", "--label", "docs",
         ],
@@ -454,11 +495,12 @@ fn rf_cfg_6_gitlab_mr_create_applies_configured_defaults() {
     );
     let calls = fixture.glab_invocations();
     assert!(
-        calls.iter().any(|call| call == &format!(
-            "mr create --repo {PROJECT} --title Defaults --description= --yes --no-editor \
+        calls.iter().any(|call| call
+            == &format!(
+                "mr create --repo {PROJECT} --title Defaults --description= --yes --no-editor \
              --target-branch=develop --assignee=default-user --label=backend --label=triage \
              --label=docs --reviewer=default-reviewer --draft"
-        )),
+            )),
         "glab invocations: {calls:?}"
     );
 }
@@ -475,7 +517,7 @@ fn rf_cfg_6_gitlab_mr_create_explicit_flags_replace_configured_defaults() {
     )
     .expect("write GitLab merge-request defaults");
 
-    let output = fixture.run_gitlab(
+    let output = fixture.run_gitlab_json(
         &[
             "mr",
             "create",
@@ -498,10 +540,11 @@ fn rf_cfg_6_gitlab_mr_create_explicit_flags_replace_configured_defaults() {
     );
     let calls = fixture.glab_invocations();
     assert!(
-        calls.iter().any(|call| call == &format!(
-            "mr create --repo {PROJECT} --title Override --description= --yes --no-editor \
+        calls.iter().any(|call| call
+            == &format!(
+                "mr create --repo {PROJECT} --title Override --description= --yes --no-editor \
              --target-branch=main --assignee=alice --label=backend --reviewer=bob --draft"
-        )),
+            )),
         "glab invocations: {calls:?}"
     );
     assert!(!calls.iter().any(|call| call.contains("default-user")

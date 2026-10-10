@@ -227,7 +227,7 @@ pub trait PullRequestProvider {
         number: u64,
         patch: &PrPatch,
         transition: Option<&PrTransition>,
-    ) -> Result<PullRequest, AppError>;
+    ) -> Result<(PullRequest, bool), AppError>;
     fn diff(&self, number: u64, name_only: bool) -> Result<String, AppError>;
     fn checks(&self, number: u64, options: &PrChecksOptions) -> Result<Vec<CheckRun>, AppError>;
     /// Submits one review; inline comments are submitted together in a single anchored request.

@@ -60,9 +60,18 @@ pub(super) fn execute(globals: &GlobalArgs, args: EditArgs) -> Result<SuccessOut
         delete_branch: args.delete_branch,
     });
     let provider = shared::provider(globals)?;
-    Ok(SuccessOutput::PullRequest(provider.edit(
-        args.number.0,
-        &patch,
-        transition.as_ref(),
-    )?))
+    let action = match transition.as_ref() {
+        Some(transition) if transition.closed => crate::output::MutationAction::Closed,
+        Some(_) => crate::output::MutationAction::Reopened,
+        None => crate::output::MutationAction::Updated,
+    };
+    let (pull_request, unchanged) = provider.edit(args.number.0, &patch, transition.as_ref())?;
+    Ok(SuccessOutput::PullRequestMutation(
+        crate::output::PullRequestMutation {
+            pull_request,
+            action,
+            unchanged,
+            gitlab: false,
+        },
+    ))
 }

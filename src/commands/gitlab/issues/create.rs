@@ -60,25 +60,28 @@ pub(super) fn execute(globals: &GlobalArgs, args: CreateArgs) -> Result<SuccessO
         }
     }
 
-    Ok(SuccessOutput::Issue(provider.create(
-        &GitLabIssueCreate {
-            title: args.title,
-            description,
-            labels,
-            assignees,
-            milestone: args.milestone,
-            confidential: args.confidential,
-            weight: args.weight,
-            due_date: args.due_date,
-            epic: args.epic,
-            linked_issues: args.linked_issues,
-            link_type: args.link_type,
-            linked_mr: args.linked_mr,
-            time_estimate: args.time_estimate,
-            time_spent: args.time_spent,
-            template: args.template,
-        },
-    )?))
+    let issue = provider.create(&GitLabIssueCreate {
+        title: args.title,
+        description,
+        labels,
+        assignees,
+        milestone: args.milestone,
+        confidential: args.confidential,
+        weight: args.weight,
+        due_date: args.due_date,
+        epic: args.epic,
+        linked_issues: args.linked_issues,
+        link_type: args.link_type,
+        linked_mr: args.linked_mr,
+        time_estimate: args.time_estimate,
+        time_spent: args.time_spent,
+        template: args.template,
+    })?;
+    Ok(SuccessOutput::IssueMutation(crate::output::IssueMutation {
+        issue,
+        action: crate::output::MutationAction::Created,
+        unchanged: false,
+    }))
 }
 
 fn validate_create_assignees(assignees: &[String]) -> Result<(), AppError> {

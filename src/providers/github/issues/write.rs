@@ -126,7 +126,7 @@ pub(super) fn edit_native(
     body: Option<&str>,
     plan: Option<&super::super::projects::ProjectPlan>,
     transition: Option<&IssueTransition>,
-) -> Result<Issue, AppError> {
+) -> Result<(Issue, bool), AppError> {
     let mut completed = Vec::new();
     let issue_url = canonical_issue_url(&provider.repo, number);
     if has_issue_writes(patch, native) {
@@ -203,19 +203,22 @@ pub(super) fn edit_native(
             completed.push("transition comment".to_owned());
         }
     }
-    read::show(provider, number).map_err(|_| {
-        if completed.is_empty() {
-            AppError::provider_response()
-        } else {
-            partial_issue_transition_error(
-                number,
-                &issue_url,
-                &completed,
-                &["issue readback"],
-                &AppError::provider_response(),
-            )
-        }
-    })
+    let unchanged = completed.is_empty();
+    read::show(provider, number)
+        .map(|issue| (issue, unchanged))
+        .map_err(|_| {
+            if completed.is_empty() {
+                AppError::provider_response()
+            } else {
+                partial_issue_transition_error(
+                    number,
+                    &issue_url,
+                    &completed,
+                    &["issue readback"],
+                    &AppError::provider_response(),
+                )
+            }
+        })
 }
 
 fn partial_issue_transition_error(

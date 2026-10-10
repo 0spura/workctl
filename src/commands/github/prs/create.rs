@@ -38,7 +38,7 @@ pub(super) fn execute(globals: &GlobalArgs, args: CreateArgs) -> Result<SuccessO
         }
     }
     let provider = shared::provider(globals)?;
-    Ok(SuccessOutput::PullRequest(provider.create(&NewPr {
+    let pull_request = provider.create(&NewPr {
         title: args.title,
         body,
         base,
@@ -51,5 +51,13 @@ pub(super) fn execute(globals: &GlobalArgs, args: CreateArgs) -> Result<SuccessO
         milestone: args.milestone,
         projects: args.projects,
         attachments: args.attachments,
-    })?))
+    })?;
+    Ok(SuccessOutput::PullRequestMutation(
+        crate::output::PullRequestMutation {
+            pull_request,
+            action: crate::output::MutationAction::Created,
+            unchanged: false,
+            gitlab: false,
+        },
+    ))
 }

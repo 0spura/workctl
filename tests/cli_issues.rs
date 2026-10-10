@@ -27,7 +27,8 @@ fn create_list_view_and_edit_preserve_the_cli_contract() {
     let title = "quoted \" title; $(touch should-not-run)";
     let body = "first line\nsecond line; $(touch should-not-run)";
 
-    let created = fixture.run_issue(&["issue", "create", "--title", title, "--body", body], "");
+    let created =
+        fixture.run_issue_json(&["issue", "create", "--title", title, "--body", body], "");
     let created = success_json(&created);
     assert_eq!(created["number"], 7);
     assert_eq!(created["state"], "open");
@@ -40,30 +41,32 @@ fn create_list_view_and_edit_preserve_the_cli_contract() {
         body
     );
 
-    let created_without_body = fixture.run_issue(&["issue", "create", "--title", "No body"], "");
+    let created_without_body =
+        fixture.run_issue_json(&["issue", "create", "--title", "No body"], "");
     success_json(&created_without_body);
     assert_eq!(
         fs::read_to_string(&fixture.input).expect("read empty-body create"),
         ""
     );
-    let listed = fixture.run_issue(&["issue", "list", "--state", "closed", "--limit", "1"], "");
+    let listed =
+        fixture.run_issue_json(&["issue", "list", "--state", "closed", "--limit", "1"], "");
     let listed = success_json(&listed);
     assert_eq!(listed.as_array().expect("issue list").len(), 1);
     assert_eq!(listed[0]["number"], 8);
     assert_eq!(listed[0]["state"], "open");
     assert!(listed[0].get("body").is_none());
-    let maximum = fixture.run_issue(&["issue", "list", "--limit", "1000"], "");
+    let maximum = fixture.run_issue_json(&["issue", "list", "--limit", "1000"], "");
     assert_eq!(
         success_json(&maximum).as_array().expect("issue list").len(),
         2
     );
 
-    let shown = fixture.run_issue(&["issue", "view", "7"], "");
+    let shown = fixture.run_issue_json(&["issue", "view", "7"], "");
     let shown = success_json(&shown);
     assert_eq!(shown["url"], "https://github.com/owner/repo/issues/7");
     assert_eq!(shown["created_at"], "2026-01-01T00:00:00Z");
 
-    let edited = fixture.run_issue(&["issue", "edit", "7", "--body", ""], "");
+    let edited = fixture.run_issue_json(&["issue", "edit", "7", "--body", ""], "");
     let edited = success_json(&edited);
     assert_eq!(edited["number"], 7);
     assert_eq!(
@@ -91,15 +94,15 @@ fn text_output_and_provider_failures_are_safe() {
     assert!(text.status.success());
     assert!(String::from_utf8_lossy(&text.stdout).contains("#8 First [open]"));
 
-    let auth = fixture.run_issue(&["issue", "view", "7"], "auth-failure");
+    let auth = fixture.run_issue_json(&["issue", "view", "7"], "auth-failure");
     let error = error_json(&auth);
     assert_eq!(error["code"], "authentication");
     assert!(!String::from_utf8_lossy(&auth.stderr).contains("provider diagnostic"));
 
-    let pull_request = fixture.run_issue(&["issue", "view", "7"], "pull-request");
+    let pull_request = fixture.run_issue_json(&["issue", "view", "7"], "pull-request");
     assert_eq!(error_json(&pull_request)["code"], "not_issue");
     let large_body = "x".repeat(100_000);
-    let early_exit = fixture.run_issue(
+    let early_exit = fixture.run_issue_json(
         &[
             "issue",
             "create",
@@ -111,13 +114,35 @@ fn text_output_and_provider_failures_are_safe() {
         "early-exit",
     );
     assert_eq!(success_json(&early_exit)["number"], 7);
-    let pull_request_edit = fixture.run_issue(
+    let pull_request_edit = fixture.run_issue_json(
         &["issue", "edit", "7", "--title", "Must not change"],
         "pull-request",
     );
     assert_eq!(error_json(&pull_request_edit)["code"], "not_issue");
     let log = fs::read_to_string(&fixture.log).expect("read gh argument log");
     assert!(!log.contains("api --method PATCH"));
+}
+
+#[test]
+fn default_long_body_write_acknowledgement_is_compact() {
+    let fixture = Fixture::new();
+    let body = "private submitted description".repeat(1_000);
+    let output = fixture.run_issue(
+        &[
+            "issue",
+            "create",
+            "--title",
+            "Compact acknowledgement",
+            "--body",
+            &body,
+        ],
+        "",
+    );
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).expect("text output is UTF-8"),
+        "#7 created\n"
+    );
 }
 
 #[test]
@@ -131,14 +156,14 @@ fn removed_suggestion_command_is_rejected_before_github_access() {
 #[test]
 fn automatic_label_markers_require_key_before_github_access() {
     let fixture = Fixture::new();
-    let create = fixture.run_issue(
+    let create = fixture.run_issue_json(
         &["issue", "create", "--title", "Bug", "--label", "@auto"],
         "",
     );
     assert_eq!(error_json(&create)["code"], "decision_authentication");
-    let edit = fixture.run_issue(&["issue", "edit", "7", "--add-label", "@auto"], "");
+    let edit = fixture.run_issue_json(&["issue", "edit", "7", "--add-label", "@auto"], "");
     assert_eq!(error_json(&edit)["code"], "decision_authentication");
-    let remove = fixture.run_issue(&["issue", "edit", "7", "--remove-label", "@auto"], "");
+    let remove = fixture.run_issue_json(&["issue", "edit", "7", "--remove-label", "@auto"], "");
     assert_eq!(error_json(&remove)["code"], "invalid_input");
     assert!(!fixture.log.exists());
 }
@@ -159,6 +184,8 @@ fn removed_gliner_model_is_rejected_before_provider_access() {
             "Unsupported model",
             "--label",
             "@auto",
+            "--format",
+            "json",
         ],
         "",
         "fastino/GLiNER2.5-Decide",
@@ -267,7 +294,7 @@ fn decision_model_configuration_replaces_environment_configuration() {
         r#"{"decisionModel":{"model":"laya","apiKey":"shared-secret-token"}}"#,
     )
     .expect("write shared decision-model key");
-    let rejected = shared_key_fixture.run_issue(
+    let rejected = shared_key_fixture.run_issue_json(
         &[
             "issue",
             "create",
@@ -363,7 +390,7 @@ fn decision_model_configuration_replaces_environment_configuration() {
 #[test]
 fn invalid_inputs_and_unsupported_provider_fail_before_gh() {
     let fixture = Fixture::new();
-    let blank_title = fixture.run_issue(&["issue", "create", "--title", "   "], "");
+    let blank_title = fixture.run_issue_json(&["issue", "create", "--title", "   "], "");
     assert_eq!(error_json(&blank_title)["code"], "invalid_input");
     let invalid = [
         &["issue", "list", "--limit", "0"][..],
@@ -386,14 +413,14 @@ fn invalid_inputs_and_unsupported_provider_fail_before_gh() {
         &["issue", "delete", "7"][..],
     ];
     for args in invalid {
-        let output = fixture.run_issue(args, "");
+        let output = fixture.run_issue_json(args, "");
         assert_eq!(error_json(&output)["code"], "invalid_input");
     }
     assert!(!fixture.log.exists());
 
     // GitLab is a supported provider, so the grammar — not a runtime check — has to reject the
     // other provider's verbs, before any provider command runs.
-    let wrong_grammar = fixture.run(
+    let wrong_grammar = fixture.run_json(
         &[
             "--provider",
             "gitlab",
@@ -402,6 +429,8 @@ fn invalid_inputs_and_unsupported_provider_fail_before_gh() {
             "issue",
             "edit",
             "1",
+            "--format",
+            "json",
         ],
         "",
     );
@@ -438,7 +467,8 @@ fn invalid_inputs_and_unsupported_provider_fail_before_gh() {
         r#"{"repo":"owner/repo"}"#,
     )
     .expect("write invalid project config");
-    let invalid_config = fixture.run_issue(&["issue", "create", "--title", "Must not mutate"], "");
+    let invalid_config =
+        fixture.run_issue_json(&["issue", "create", "--title", "Must not mutate"], "");
     assert_eq!(error_json(&invalid_config)["code"], "config");
     assert!(!fixture.log.exists());
 }
@@ -453,14 +483,14 @@ fn body_changes_reach_github_without_rewriting_the_whole_body() {
     )
     .expect("write patch file");
 
-    let appended = fixture.run_issue(&["issue", "edit", "7", "--append-body", "extra"], "");
+    let appended = fixture.run_issue_json(&["issue", "edit", "7", "--append-body", "extra"], "");
     success_json(&appended);
     assert_eq!(
         fs::read_to_string(&fixture.input).expect("read append body"),
         "Provider body\n\n## Notes\n\noriginal notes\nextra"
     );
 
-    let sectioned = fixture.run_issue(
+    let sectioned = fixture.run_issue_json(
         &[
             "issue",
             "edit",
@@ -478,7 +508,7 @@ fn body_changes_reach_github_without_rewriting_the_whole_body() {
         "Provider body\n\n## Notes\nreplaced"
     );
 
-    let patched = fixture.run_issue(&["issue", "edit", "7", "--patch-file", "body.patch"], "");
+    let patched = fixture.run_issue_json(&["issue", "edit", "7", "--patch-file", "body.patch"], "");
     success_json(&patched);
     assert_eq!(
         fs::read_to_string(&fixture.input).expect("read patched body"),
@@ -494,7 +524,7 @@ fn body_changes_reach_github_without_rewriting_the_whole_body() {
 #[test]
 fn issue_metadata_and_attachments_follow_optional_gh_flags() {
     let fixture = Fixture::new();
-    let created = fixture.run_issue(
+    let created = fixture.run_issue_json(
         &[
             "issue",
             "create",
@@ -523,7 +553,7 @@ fn issue_metadata_and_attachments_follow_optional_gh_flags() {
         line == "issue create --repo owner/repo --title Triaged --body-file - --assignee octocat --label bug --label p1 --milestone M1 --project Roadmap --attach screen.png#Screenshot"
     }));
 
-    let edited = fixture.run_issue(
+    let edited = fixture.run_issue_json(
         &[
             "issue",
             "edit",
@@ -661,7 +691,7 @@ fn configured_project_fields_are_selected_and_written() {
 fn explicit_project_field_overrides_auto_selection_without_model_call() {
     let fixture = Fixture::new();
     init_configured_project_with_auto_fields(&fixture, r#""Priority":"High""#, &["Priority"]);
-    let output = fixture.run_issue(
+    let output = fixture.run_issue_json(
         &[
             "issue",
             "create",
@@ -783,6 +813,8 @@ fn tied_project_field_scores_fail_before_issue_creation() {
             "create",
             "--title",
             "Tied priority",
+            "--format",
+            "json",
         ],
         "",
         "local/test-model",
@@ -800,7 +832,7 @@ fn tied_project_field_scores_fail_before_issue_creation() {
 fn github_project_defaults_and_dynamic_fields_apply_before_issue_readback() {
     let fixture = Fixture::new();
     init_configured_project(&fixture, r#""Priority":"High","Notes":"from config""#);
-    let output = fixture.run_issue(
+    let output = fixture.run_issue_json(
         &[
             "issue",
             "create",
@@ -838,7 +870,7 @@ fn github_project_defaults_and_dynamic_fields_apply_before_issue_readback() {
 fn project_defaults_do_not_apply_outside_the_repository_allowlist() {
     let fixture = Fixture::new();
     init_configured_project(&fixture, r#""Priority":"High""#);
-    let output = fixture.run(
+    let output = fixture.run_json(
         &[
             "--provider",
             "github",
@@ -863,7 +895,7 @@ fn project_defaults_do_not_apply_outside_the_repository_allowlist() {
 fn invalid_project_field_fails_before_issue_creation() {
     let fixture = Fixture::new();
     init_configured_project(&fixture, r#""Priority":"Not an option""#);
-    let output = fixture.run_issue(&["issue", "create", "--title", "Invalid"], "");
+    let output = fixture.run_issue_json(&["issue", "create", "--title", "Invalid"], "");
     let error = error_json(&output);
     assert_eq!(error["code"], "invalid_input");
     let invocations = fs::read_to_string(&fixture.log).expect("read gh invocations");
@@ -875,7 +907,7 @@ fn invalid_project_field_fails_before_issue_creation() {
 fn multiple_projects_with_field_assignment_fail_before_remote_writes() {
     let fixture = Fixture::new();
     init_configured_project(&fixture, "");
-    let output = fixture.run_issue(
+    let output = fixture.run_issue_json(
         &[
             "issue",
             "create",
@@ -898,7 +930,7 @@ fn multiple_projects_with_field_assignment_fail_before_remote_writes() {
 fn mismatched_project_title_fails_before_issue_creation() {
     let fixture = Fixture::new();
     init_configured_project(&fixture, "");
-    let output = fixture.run_issue(
+    let output = fixture.run_issue_json(
         &[
             "issue",
             "create",
@@ -922,7 +954,7 @@ fn mismatched_project_title_fails_before_issue_creation() {
 fn project_field_failure_returns_created_issue_without_retrying() {
     let fixture = Fixture::new();
     init_configured_project(&fixture, r#""Priority":"High""#);
-    let output = fixture.run_issue(
+    let output = fixture.run_issue_json(
         &[
             "issue",
             "create",
@@ -963,7 +995,7 @@ fn project_field_failure_returns_created_issue_without_retrying() {
 #[test]
 fn failed_attachment_create_reports_possible_remote_creation_without_retrying() {
     let fixture = Fixture::new();
-    let output = fixture.run_issue(
+    let output = fixture.run_issue_json(
         &[
             "issue",
             "create",
@@ -983,7 +1015,7 @@ fn failed_attachment_create_reports_possible_remote_creation_without_retrying() 
 #[test]
 fn attachments_require_supported_gh_without_attempting_the_write() {
     let fixture = Fixture::new();
-    let output = fixture.run_issue(
+    let output = fixture.run_issue_json(
         &[
             "issue",
             "create",
@@ -1005,7 +1037,7 @@ fn attachments_require_supported_gh_without_attempting_the_write() {
 #[test]
 fn list_filters_and_edit_guards_are_enforced() {
     let fixture = Fixture::new();
-    let listed = fixture.run_issue(
+    let listed = fixture.run_issue_json(
         &[
             "issue",
             "list",
@@ -1028,7 +1060,7 @@ fn list_filters_and_edit_guards_are_enforced() {
         "issue list --repo owner/repo --state open --limit 30 --json number,title,state,url,updatedAt --label bug --label p1 --assignee me --milestone v1 --search in:title fix"
     ));
 
-    let guarded = fixture.run_issue(
+    let guarded = fixture.run_issue_json(
         &[
             "issue",
             "edit",
@@ -1044,7 +1076,7 @@ fn list_filters_and_edit_guards_are_enforced() {
     let log = fs::read_to_string(&fixture.log).expect("read gh argument log");
     assert!(!log.contains("issue edit 7"));
 
-    let accepted = fixture.run_issue(
+    let accepted = fixture.run_issue_json(
         &[
             "issue",
             "edit",
@@ -1068,7 +1100,7 @@ fn list_filters_and_edit_guards_are_enforced() {
         &["issue", "edit", "7", "--patch-file", "bad.patch"][..],
     ];
     for args in rejected {
-        let output = fixture.run_issue(args, "");
+        let output = fixture.run_issue_json(args, "");
         let code = error_json(&output)["code"].clone();
         assert!(
             code == "invalid_input" || code == "patch_conflict",
@@ -1082,7 +1114,7 @@ fn list_filters_and_edit_guards_are_enforced() {
 #[test]
 fn issue_create_omits_the_milestone_unless_current_is_requested() {
     let fixture = Fixture::new();
-    let created = fixture.run_issue(
+    let created = fixture.run_issue_json(
         &["issue", "create", "--title", "No milestone"],
         "milestone-nearest",
     );
@@ -1092,7 +1124,7 @@ fn issue_create_omits_the_milestone_unless_current_is_requested() {
     assert!(!log.contains("--milestone"));
 
     let current = Fixture::new();
-    let created = current.run_issue(
+    let created = current.run_issue_json(
         &[
             "issue",
             "create",
@@ -1109,7 +1141,7 @@ fn issue_create_omits_the_milestone_unless_current_is_requested() {
     assert!(log.contains("--milestone Sooner"));
 
     let edited = Fixture::new();
-    let output = edited.run_issue(
+    let output = edited.run_issue_json(
         &["issue", "edit", "7", "--milestone", "@current"],
         "milestone-nearest",
     );
@@ -1118,7 +1150,7 @@ fn issue_create_omits_the_milestone_unless_current_is_requested() {
     assert!(log.contains("issue edit 7 --repo owner/repo --milestone Sooner"));
 
     let assigned = Fixture::new();
-    let created = assigned.run_issue(
+    let created = assigned.run_issue_json(
         &[
             "issue",
             "create",
@@ -1138,7 +1170,7 @@ fn issue_create_omits_the_milestone_unless_current_is_requested() {
     ));
 
     let explicit = Fixture::new();
-    let created = explicit.run_issue(
+    let created = explicit.run_issue_json(
         &[
             "issue",
             "create",
@@ -1158,7 +1190,7 @@ fn issue_create_omits_the_milestone_unless_current_is_requested() {
 #[test]
 fn issue_create_rejects_current_without_an_eligible_milestone() {
     let fixture = Fixture::new();
-    let output = fixture.run_issue(
+    let output = fixture.run_issue_json(
         &[
             "issue",
             "create",
@@ -1177,7 +1209,7 @@ fn issue_create_rejects_current_without_an_eligible_milestone() {
 #[test]
 fn issue_create_rejects_tied_nearest_milestones_without_writing() {
     let fixture = Fixture::new();
-    let output = fixture.run_issue(
+    let output = fixture.run_issue_json(
         &[
             "issue",
             "create",
@@ -1198,7 +1230,7 @@ fn issue_create_rejects_tied_nearest_milestones_without_writing() {
 fn project_edit_sets_and_clears_without_issue_or_membership_writes() {
     let fixture = Fixture::new();
     init_configured_project_with_auto_fields(&fixture, r#""Notes":"creation only""#, &["Priority"]);
-    let output = fixture.run_issue(
+    let output = fixture.run_issue_json(
         &[
             "issue",
             "edit",
@@ -1254,7 +1286,7 @@ fn project_edit_rejects_invalid_requests_before_writes() {
         let mut args = vec!["issue", "edit", "7", "--title", "Must not write"];
         args.extend(flags);
         assert_eq!(
-            error_json(&fixture.run_issue(&args, ""))["code"],
+            error_json(&fixture.run_issue_json(&args, ""))["code"],
             "invalid_input"
         );
         let log = fs::read_to_string(&fixture.log).unwrap_or_default();
@@ -1288,7 +1320,7 @@ fn project_edit_preserves_scope_and_issue_guard() {
         if let Some(timestamp) = extra {
             args.extend(["--expect-updated-at", timestamp]);
         }
-        assert_eq!(error_json(&fixture.run(&args, mode))["code"], code);
+        assert_eq!(error_json(&fixture.run_json(&args, mode))["code"], code);
         let log = fs::read_to_string(&fixture.log).unwrap_or_default();
         assert!(!log.contains("issue edit"));
         assert!(!log.contains("item-edit"));
@@ -1300,7 +1332,7 @@ fn project_edit_preserves_scope_and_issue_guard() {
 fn project_field_only_edit_reports_completed_operations_on_later_failure() {
     let fixture = Fixture::new();
     init_configured_project(&fixture, "");
-    let output = fixture.run_issue(
+    let output = fixture.run_issue_json(
         &[
             "issue",
             "edit",
@@ -1357,7 +1389,7 @@ fn project_edit_reports_issue_success_and_stops_after_field_failure() {
         if let Some(title) = title {
             args.extend(["--title", title, "--state", "closed", "--comment", "Done"]);
         }
-        let output = fixture.run_issue(&args, "project-edit-failure");
+        let output = fixture.run_issue_json(&args, "project-edit-failure");
         let error = error_json(&output);
         assert_eq!(error["code"], code);
         if title.is_some() {
@@ -1435,7 +1467,7 @@ fn view_exposes_native_relationship_direction_and_safe_text() {
         relation_connection(vec![related_issue(21, "owner/repo", "CLOSED")], 1, None);
     graph["parent"]["title"] = serde_json::json!("Parent\u{1b}[2J");
     relationship_response(&fixture, "relationship-initial.json", graph);
-    let view = success_json(&fixture.run_issue(&["issue", "view", "7"], ""));
+    let view = success_json(&fixture.run_issue_json(&["issue", "view", "7"], ""));
     assert_eq!(view["body"], "Provider body\n\n## Notes\n\noriginal notes");
     assert_eq!(view["issue_type"], "Bug");
     assert_eq!(
@@ -1451,15 +1483,13 @@ fn view_exposes_native_relationship_direction_and_safe_text() {
     let text = fixture.run_issue(&["issue", "view", "7", "--format", "text"], "");
     assert!(text.status.success());
     let text = String::from_utf8(text.stdout).unwrap();
-    assert!(
-        text.contains("Parent: #1 Parent\\u{1b}[2J [open] https://github.com/owner/epics/issues/1")
-    );
+    assert!(text.contains("Parent\\u{1b}[2J [open]"));
     assert!(!text.contains("Blocked by:"));
     assert!(!text.contains("Blocking:"));
     assert!(!text.contains('\u{1b}'));
 
     relationship_response(&fixture, "relationship-initial.json", empty_relationships());
-    let empty = success_json(&fixture.run_issue(&["issue", "view", "7"], ""));
+    let empty = success_json(&fixture.run_issue_json(&["issue", "view", "7"], ""));
     assert!(empty["parent"].is_null());
     assert!(empty["issue_type"].is_null());
     assert_eq!(empty["sub_issues"], serde_json::json!([]));
@@ -1483,7 +1513,7 @@ fn view_paginates_each_relationship_connection() {
                 "relations": relation_connection(vec![related_issue(200, "other/repo", "CLOSED")], 101, None)
             }),
         );
-        let view = success_json(&fixture.run_issue(&["issue", "view", "7"], ""));
+        let view = success_json(&fixture.run_issue_json(&["issue", "view", "7"], ""));
         let expected: Vec<_> = (100..200)
             .map(|number| {
                 serde_json::json!({
@@ -1504,7 +1534,7 @@ fn view_paginates_each_relationship_connection() {
 #[test]
 fn view_rejects_incomplete_relationship_graphs_without_leaking_diagnostics() {
     let fixture = Fixture::new();
-    let failure = fixture.run_issue(&["issue", "view", "7"], "relationship-failure");
+    let failure = fixture.run_issue_json(&["issue", "view", "7"], "relationship-failure");
     assert_eq!(error_json(&failure)["code"], "github_cli");
     assert!(failure.stdout.is_empty());
     assert!(
@@ -1542,7 +1572,7 @@ fn view_rejects_incomplete_relationship_graphs_without_leaking_diagnostics() {
         (missing_cursor, "provider_response"),
     ] {
         relationship_response(&fixture, "relationship-initial.json", graph);
-        let output = fixture.run_issue(&["issue", "view", "7"], "");
+        let output = fixture.run_issue_json(&["issue", "view", "7"], "");
         assert_eq!(error_json(&output)["code"], expected_code);
         assert!(output.stdout.is_empty());
     }
@@ -1556,7 +1586,7 @@ fn view_rejects_incomplete_relationship_graphs_without_leaking_diagnostics() {
         .unwrap(),
     )
     .unwrap();
-    let error = fixture.run_issue(&["issue", "view", "7"], "");
+    let error = fixture.run_issue_json(&["issue", "view", "7"], "");
     assert_eq!(error_json(&error)["code"], "provider_response");
     assert!(!String::from_utf8_lossy(&error.stderr).contains("private GraphQL error"));
 
@@ -1574,7 +1604,7 @@ fn view_rejects_incomplete_relationship_graphs_without_leaking_diagnostics() {
             "relations":relation_connection(vec![related_issue(11, "owner/repo", "OPEN")], 3, Some("same"))
         }),
     );
-    let output = fixture.run_issue(&["issue", "view", "7"], "");
+    let output = fixture.run_issue_json(&["issue", "view", "7"], "");
     assert_eq!(error_json(&output)["code"], "provider_response");
     assert!(output.stdout.is_empty());
 }
@@ -1617,7 +1647,7 @@ fn blockers_print_open_chains_and_omit_closed_edges() {
     write_graph(18, vec![]);
     write_graph(17, vec![]);
 
-    let output = fixture.run_issue(&["issue", "blockers", "30"], "blocker-graph");
+    let output = fixture.run_issue_json(&["issue", "blockers", "30"], "blocker-graph");
     let chains = success_json(&output);
     assert_eq!(
         chains,
@@ -1639,7 +1669,7 @@ fn blockers_print_open_chains_and_omit_closed_edges() {
 #[test]
 fn blockers_empty_closed_and_failure_results_are_unambiguous() {
     let fixture = Fixture::new();
-    let empty = fixture.run_issue(&["issue", "blockers", "30"], "blocker-empty");
+    let empty = fixture.run_issue_json(&["issue", "blockers", "30"], "blocker-empty");
     assert_eq!(success_json(&empty), serde_json::json!([]));
     let empty_text = fixture.run_issue(
         &["issue", "blockers", "30", "--format", "text"],
@@ -1649,7 +1679,7 @@ fn blockers_empty_closed_and_failure_results_are_unambiguous() {
     assert!(empty_text.stdout.is_empty());
 
     fs::write(&fixture.log, "").expect("reset provider log");
-    let closed = fixture.run_issue(&["issue", "blockers", "30"], "blocker-closed-target");
+    let closed = fixture.run_issue_json(&["issue", "blockers", "30"], "blocker-closed-target");
     assert_eq!(success_json(&closed), serde_json::json!([]));
     assert!(
         !fs::read_to_string(&fixture.log)
@@ -1657,7 +1687,7 @@ fn blockers_empty_closed_and_failure_results_are_unambiguous() {
             .contains("graphql")
     );
 
-    let failed = fixture.run_issue(&["issue", "blockers", "30"], "blocker-failure");
+    let failed = fixture.run_issue_json(&["issue", "blockers", "30"], "blocker-failure");
     assert_eq!(error_json(&failed)["code"], "github_cli");
     assert!(failed.stdout.is_empty());
     assert!(!String::from_utf8_lossy(&failed.stderr).contains("private blocker query diagnostic"));
@@ -1666,11 +1696,11 @@ fn blockers_empty_closed_and_failure_results_are_unambiguous() {
 #[test]
 fn blockers_reject_cycles_and_depth_limits_without_partial_output() {
     let fixture = Fixture::new();
-    let cycle = fixture.run_issue(&["issue", "blockers", "30"], "blocker-cycle");
+    let cycle = fixture.run_issue_json(&["issue", "blockers", "30"], "blocker-cycle");
     assert_eq!(error_json(&cycle)["code"], "provider_response");
     assert!(cycle.stdout.is_empty());
 
-    let deep = fixture.run_issue(&["issue", "blockers", "125"], "blocker-depth");
+    let deep = fixture.run_issue_json(&["issue", "blockers", "125"], "blocker-depth");
     assert_eq!(error_json(&deep)["code"], "relationship_limit");
     assert!(deep.stdout.is_empty());
 }
@@ -1741,6 +1771,8 @@ fn project_auto_edit_selects_only_requested_fields_and_preserves_uncertainty() {
                 "@auto",
                 "--project-field",
                 "Priority=@auto",
+                "--format",
+                "json",
             ],
             "",
             "local/test-model",
@@ -1768,7 +1800,7 @@ fn project_auto_edit_selects_only_requested_fields_and_preserves_uncertainty() {
 fn project_auto_edit_fails_closed_before_writes() {
     let fixture = Fixture::new();
     init_configured_project(&fixture, "");
-    let missing = fixture.run_issue(
+    let missing = fixture.run_issue_json(
         &["issue", "edit", "7", "--project-field", "Priority=@auto"],
         "",
     );
@@ -1786,6 +1818,8 @@ fn project_auto_edit_fails_closed_before_writes() {
                 "7",
                 "--project-field",
                 value,
+                "--format",
+                "json",
             ],
             "",
             "local/test-model",
@@ -1843,7 +1877,7 @@ fn issue_lifecycle_comments_and_conversation_lock_use_gh_native_commands() {
 
     // A state-only edit closes through the native command, comments on stdin, and reads back once.
     fs::write(&fixture.log, "").expect("reset gh argument log");
-    let closed = fixture.run_issue(
+    let closed = fixture.run_issue_json(
         &[
             "issue",
             "edit",
@@ -1877,7 +1911,7 @@ fn issue_lifecycle_comments_and_conversation_lock_use_gh_native_commands() {
 
     // A duplicate target reaches the native close without a comment.
     fs::write(&fixture.log, "").expect("reset gh argument log");
-    let duplicate = fixture.run_issue(
+    let duplicate = fixture.run_issue_json(
         &[
             "issue",
             "edit",
@@ -1902,7 +1936,7 @@ fn issue_lifecycle_comments_and_conversation_lock_use_gh_native_commands() {
 
     // Reopening reopens first and posts the stdin comment afterwards.
     fs::write(&fixture.log, "").expect("reset gh argument log");
-    let reopened = fixture.run_issue(
+    let reopened = fixture.run_issue_json(
         &[
             "issue",
             "edit",
@@ -1930,16 +1964,16 @@ fn issue_lifecycle_comments_and_conversation_lock_use_gh_native_commands() {
         )
     );
 
-    let comment = fixture.run_issue(&["issue", "comment", "7", "--body", "Comment body"], "");
+    let comment = fixture.run_issue_json(&["issue", "comment", "7", "--body", "Comment body"], "");
     assert_eq!(success_json(&comment)["target"], "issue");
     assert_eq!(
         fs::read_to_string(&fixture.input).expect("read comment input"),
         "Comment body"
     );
 
-    let locked = fixture.run_issue(&["issue", "lock", "7", "--reason", "resolved"], "");
+    let locked = fixture.run_issue_json(&["issue", "lock", "7", "--reason", "resolved"], "");
     assert_eq!(success_json(&locked)["locked"], true);
-    let unlocked = fixture.run_issue(&["issue", "lock", "7", "--undo"], "");
+    let unlocked = fixture.run_issue_json(&["issue", "lock", "7", "--undo"], "");
     assert_eq!(success_json(&unlocked)["locked"], false);
 
     let log = fs::read_to_string(&fixture.log).expect("read gh arguments");
@@ -1947,16 +1981,16 @@ fn issue_lifecycle_comments_and_conversation_lock_use_gh_native_commands() {
     assert!(log.contains("issue lock 7 --repo owner/repo --reason resolved"));
     assert!(log.contains("issue unlock 7 --repo owner/repo"));
 
-    let invalid = fixture.run_issue(&["issue", "comment", "7"], "");
+    let invalid = fixture.run_issue_json(&["issue", "comment", "7"], "");
     assert_eq!(error_json(&invalid)["code"], "invalid_input");
-    let invalid_lock = fixture.run_issue(&["issue", "lock", "7", "--reason", "unknown"], "");
+    let invalid_lock = fixture.run_issue_json(&["issue", "lock", "7", "--reason", "unknown"], "");
     assert!(!invalid_lock.status.success());
 
     // Transition modifiers that need `--state` and conflicting lock flags fail before provider access.
     fs::remove_file(&fixture.log).expect("clear gh argument log");
-    let orphan_comment = fixture.run_issue(&["issue", "edit", "7", "--comment", "orphan"], "");
+    let orphan_comment = fixture.run_issue_json(&["issue", "edit", "7", "--comment", "orphan"], "");
     assert_eq!(error_json(&orphan_comment)["code"], "invalid_input");
-    let orphan_reason = fixture.run_issue(
+    let orphan_reason = fixture.run_issue_json(
         &[
             "issue",
             "edit",
@@ -1969,7 +2003,7 @@ fn issue_lifecycle_comments_and_conversation_lock_use_gh_native_commands() {
         "",
     );
     assert_eq!(error_json(&orphan_reason)["code"], "invalid_input");
-    let conflicting_lock = fixture.run_issue(
+    let conflicting_lock = fixture.run_issue_json(
         &["issue", "lock", "7", "--undo", "--reason", "resolved"],
         "",
     );
@@ -1981,7 +2015,7 @@ fn issue_lifecycle_comments_and_conversation_lock_use_gh_native_commands() {
 #[test]
 fn develop_creates_and_lists_linked_branches() {
     let fixture = Fixture::new();
-    let created = fixture.run_issue(
+    let created = fixture.run_issue_json(
         &[
             "issue",
             "develop",
@@ -1998,7 +2032,7 @@ fn develop_creates_and_lists_linked_branches() {
     assert_eq!(created["number"], 7);
     assert_eq!(created["branch"], "feature-x");
 
-    let listed = fixture.run_issue(&["issue", "develop", "7", "--list"], "");
+    let listed = fixture.run_issue_json(&["issue", "develop", "7", "--list"], "");
     let listed = success_json(&listed);
     assert_eq!(listed["number"], 7);
     assert_eq!(listed["branches"][0], "feature-x");
@@ -2006,9 +2040,10 @@ fn develop_creates_and_lists_linked_branches() {
 
     let text = fixture.run_issue(&["issue", "develop", "7", "--list", "--format", "text"], "");
     assert!(text.status.success());
+    let text = String::from_utf8_lossy(&text.stdout);
     assert_eq!(
-        String::from_utf8_lossy(&text.stdout),
-        "issue #7 linked branches:\nfeature-x\nfeature-y\n"
+        text.lines().skip(1).collect::<Vec<_>>(),
+        ["feature-x", "feature-y"]
     );
 
     let lines = gh_lines(&fixture);
@@ -2021,14 +2056,14 @@ fn develop_creates_and_lists_linked_branches() {
     );
     assert!(lines.contains(&"issue develop 7 --repo owner/repo --list".to_string()));
 
-    let failure = fixture.run_issue(
+    let failure = fixture.run_issue_json(
         &["issue", "develop", "7", "--name", "feature-x"],
         "develop-failure",
     );
     assert_eq!(error_json(&failure)["code"], "github_cli");
 
     // `--list` reports instead of creating, so the creating flags conflict with it.
-    let conflicting = fixture.run_issue(
+    let conflicting = fixture.run_issue_json(
         &["issue", "develop", "7", "--list", "--name", "feature-x"],
         "",
     );
@@ -2039,14 +2074,17 @@ fn develop_creates_and_lists_linked_branches() {
 #[test]
 fn develop_reports_unreadable_provider_output() {
     let fixture = Fixture::new();
-    let create = fixture.run_issue(
+    let create = fixture.run_issue_json(
         &["issue", "develop", "7", "--name", "feature-x"],
         "develop-unreadable-create",
     );
     assert_eq!(error_json(&create)["code"], "provider_response");
     assert!(create.stdout.is_empty());
 
-    let list = fixture.run_issue(&["issue", "develop", "7", "--list"], "develop-unreadable-list");
+    let list = fixture.run_issue_json(
+        &["issue", "develop", "7", "--list"],
+        "develop-unreadable-list",
+    );
     assert_eq!(error_json(&list)["code"], "provider_response");
     assert!(list.stdout.is_empty());
 }
@@ -2063,13 +2101,13 @@ fn configured_list_limit_applies_until_the_flag_overrides_it() {
     .expect("write list limit config");
 
     assert_eq!(
-        success_json(&fixture.run_issue(&["issue", "list"], ""))
+        success_json(&fixture.run_issue_json(&["issue", "list"], ""))
             .as_array()
             .expect("issue list")
             .len(),
         2
     );
-    success_json(&fixture.run_issue(&["issue", "list", "--limit", "3"], ""));
+    success_json(&fixture.run_issue_json(&["issue", "list", "--limit", "3"], ""));
 
     let log = gh_lines(&fixture);
     assert!(
@@ -2102,6 +2140,9 @@ fn configured_output_format_applies_until_the_flag_overrides_it() {
     let text = String::from_utf8(text.stdout).expect("text output is UTF-8");
     assert!(text.starts_with("#7 Provider title [open]\n"), "{text:?}");
 
-    let json = fixture.run_issue(&["issue", "view", "7", "--format", "json"], "");
-    assert_eq!(success_json(&json)["url"], "https://github.com/owner/repo/issues/7");
+    let json = fixture.run_issue_json(&["issue", "view", "7"], "");
+    assert_eq!(
+        success_json(&json)["url"],
+        "https://github.com/owner/repo/issues/7"
+    );
 }

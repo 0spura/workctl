@@ -23,7 +23,7 @@ pub struct GlobalArgs {
     /// Repository for the selected command's provider scope
     #[arg(long, short = 'R', global = true, value_name = "REPO")]
     pub repo: Option<String>,
-    /// Success output format; defaults to defaults.output.format, then json
+    /// Output format; defaults to defaults.output.format, then compact text
     #[arg(long, global = true, value_enum, value_name = "FORMAT")]
     pub format: Option<OutputFormat>,
     /// Output format resolved before command dispatch; never a command-line argument
@@ -33,8 +33,8 @@ pub struct GlobalArgs {
 
 #[derive(Debug, Clone, Copy, Default, clap::ValueEnum)]
 pub enum OutputFormat {
-    #[default]
     Json,
+    #[default]
     Text,
 }
 

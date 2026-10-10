@@ -19,6 +19,17 @@ fn write_to(stdout: &mut impl Write, output: &SuccessOutput) -> Result<(), AppEr
         }
 
         SuccessOutput::Issue(issue) => write_issue(stdout, issue)?,
+        SuccessOutput::IssueMutation(mutation) => {
+            write_issue_mutation(stdout, mutation)?;
+        }
+        SuccessOutput::IssueMutations(mutations) => {
+            for mutation in mutations {
+                write_issue_mutation(stdout, mutation)?;
+            }
+        }
+        SuccessOutput::PullRequestMutation(mutation) => {
+            write_pull_request_mutation(stdout, mutation)?;
+        }
         SuccessOutput::GitHubIssueView(view) => {
             write_issue_header(stdout, &view.issue)?;
             if let Some(issue_type) = &view.issue_type {
@@ -35,21 +46,15 @@ fn write_to(stdout: &mut impl Write, output: &SuccessOutput) -> Result<(), AppEr
             write_safe(stdout, &view.issue.body, true)?;
             writeln!(stdout).map_err(|_| AppError::output())?;
         }
-        SuccessOutput::IssueEdits(issues) => {
-            for issue in issues {
-                write_issue(stdout, issue)?;
-            }
-        }
         SuccessOutput::Issues(issues) => {
             for issue in issues {
                 write!(stdout, "#{} ", issue.number).map_err(|_| AppError::output())?;
                 write_safe(stdout, &issue.title, false)?;
-                write!(stdout, " [{}] ", state(issue.state)).map_err(|_| AppError::output())?;
-                write_safe(stdout, &issue.url, false)?;
-                writeln!(stdout).map_err(|_| AppError::output())?;
+                writeln!(stdout, " [{}]", state(issue.state)).map_err(|_| AppError::output())?;
             }
         }
         SuccessOutput::PullRequest(pr) => write_pull_request(stdout, pr)?,
+        SuccessOutput::PullRequestStatus(status) => write_pull_request_status(stdout, status)?,
         SuccessOutput::PullRequests(prs) => {
             for pr in prs {
                 write!(stdout, "#{} ", pr.number).map_err(|_| AppError::output())?;
@@ -58,12 +63,21 @@ fn write_to(stdout: &mut impl Write, output: &SuccessOutput) -> Result<(), AppEr
                 if pr.draft {
                     write!(stdout, " [draft]").map_err(|_| AppError::output())?;
                 }
-                write!(stdout, " ").map_err(|_| AppError::output())?;
-                write_safe(stdout, &pr.url, false)?;
                 writeln!(stdout).map_err(|_| AppError::output())?;
             }
         }
-        SuccessOutput::PullRequestStatus(status) => write_pull_request_status(stdout, status)?,
+        SuccessOutput::GitLabMergeRequest(pr) => write_gitlab_pull_request(stdout, &pr.0)?,
+        SuccessOutput::GitLabMergeRequests(prs) => {
+            for pr in &prs.0 {
+                write!(stdout, "!{} ", pr.number).map_err(|_| AppError::output())?;
+                write_safe(stdout, &pr.title, false)?;
+                write!(stdout, " [{}]", pr_state(pr.state)).map_err(|_| AppError::output())?;
+                if pr.draft {
+                    write!(stdout, " [draft]").map_err(|_| AppError::output())?;
+                }
+                writeln!(stdout).map_err(|_| AppError::output())?;
+            }
+        }
         SuccessOutput::Checks(checks) => {
             for check in checks {
                 write_safe(stdout, &check.name, false)?;
@@ -71,10 +85,6 @@ fn write_to(stdout: &mut impl Write, output: &SuccessOutput) -> Result<(), AppEr
                 write_safe(stdout, &check.state, false)?;
                 if let Some(bucket) = &check.bucket {
                     write!(stdout, " ({bucket})").map_err(|_| AppError::output())?;
-                }
-                if let Some(link) = &check.link {
-                    write!(stdout, " ").map_err(|_| AppError::output())?;
-                    write_safe(stdout, link, false)?;
                 }
                 writeln!(stdout).map_err(|_| AppError::output())?;
             }
@@ -85,68 +95,57 @@ fn write_to(stdout: &mut impl Write, output: &SuccessOutput) -> Result<(), AppEr
                 writeln!(stdout).map_err(|_| AppError::output())?;
             }
         }
-        SuccessOutput::Merge {
-            number,
-            method,
-            auto,
-        } => {
-            write!(stdout, "pr #{number} ").map_err(|_| AppError::output())?;
-            if *auto {
-                write!(stdout, "auto-merge queued").map_err(|_| AppError::output())?;
-            } else {
-                write!(stdout, "merged").map_err(|_| AppError::output())?;
-            }
-            if let Some(method) = method {
-                write!(stdout, " ({method})").map_err(|_| AppError::output())?;
-            }
-            writeln!(stdout).map_err(|_| AppError::output())?;
+        SuccessOutput::Merge { number, auto, .. } => {
+            write!(stdout, "#{number} ").map_err(|_| AppError::output())?;
+            writeln!(stdout, "{}", if *auto { "merge queued" } else { "merged" })
+                .map_err(|_| AppError::output())?;
         }
         SuccessOutput::Review { number, event } => {
-            write!(stdout, "pr #{number} reviewed: ").map_err(|_| AppError::output())?;
+            write!(stdout, "#{number} reviewed: ").map_err(|_| AppError::output())?;
             write_safe(stdout, event, false)?;
             writeln!(stdout).map_err(|_| AppError::output())?;
         }
         SuccessOutput::Ready { number, draft } => {
-            write!(stdout, "pr #{number} ").map_err(|_| AppError::output())?;
-            if *draft {
-                writeln!(stdout, "converted to draft").map_err(|_| AppError::output())?;
-            } else {
-                writeln!(stdout, "ready for review").map_err(|_| AppError::output())?;
-            }
+            writeln!(
+                stdout,
+                "#{number} {}",
+                if *draft {
+                    "converted to draft"
+                } else {
+                    "ready for review"
+                }
+            )
+            .map_err(|_| AppError::output())?;
         }
-        SuccessOutput::State { number, state } => {
-            write!(stdout, "pr #{number} ").map_err(|_| AppError::output())?;
+        SuccessOutput::State { number, state } | SuccessOutput::IssueState { number, state } => {
+            write!(stdout, "#{number} ").map_err(|_| AppError::output())?;
             write_safe(stdout, state, false)?;
             writeln!(stdout).map_err(|_| AppError::output())?;
         }
-        SuccessOutput::IssueState { number, state } => {
-            write!(stdout, "issue #{number} ").map_err(|_| AppError::output())?;
-            write_safe(stdout, state, false)?;
+        SuccessOutput::GitLabState(state) => {
+            write!(stdout, "!{} ", state.number).map_err(|_| AppError::output())?;
+            write_safe(stdout, &state.state, false)?;
             writeln!(stdout).map_err(|_| AppError::output())?;
         }
         SuccessOutput::LinkedBranch { number, branch } => {
-            write!(stdout, "issue #{number} linked branch ").map_err(|_| AppError::output())?;
+            write!(stdout, "#{number} linked branch ").map_err(|_| AppError::output())?;
             write_safe(stdout, branch, false)?;
             writeln!(stdout).map_err(|_| AppError::output())?;
         }
         SuccessOutput::LinkedBranches { number, branches } => {
-            writeln!(stdout, "issue #{number} linked branches:").map_err(|_| AppError::output())?;
+            writeln!(stdout, "#{number} linked branches:").map_err(|_| AppError::output())?;
             for branch in branches {
                 write_safe(stdout, branch, false)?;
                 writeln!(stdout).map_err(|_| AppError::output())?;
             }
         }
-        SuccessOutput::Comment { number, target } => {
-            writeln!(stdout, "{target} #{number} commented").map_err(|_| AppError::output())?;
+        SuccessOutput::Comment { number, .. } => {
+            writeln!(stdout, "#{number} commented").map_err(|_| AppError::output())?;
         }
-        SuccessOutput::ConversationLock {
-            number,
-            target,
-            locked,
-        } => {
+        SuccessOutput::ConversationLock { number, locked, .. } => {
             writeln!(
                 stdout,
-                "{target} #{number} conversation {}",
+                "#{number} conversation {}",
                 if *locked { "locked" } else { "unlocked" }
             )
             .map_err(|_| AppError::output())?;
@@ -155,31 +154,29 @@ fn write_to(stdout: &mut impl Write, output: &SuccessOutput) -> Result<(), AppEr
             number,
             pull_request,
         } => {
-            writeln!(stdout, "pr #{number} revert opened as pr #{pull_request}")
+            writeln!(stdout, "#{number} revert opened as #{pull_request}")
                 .map_err(|_| AppError::output())?;
         }
         SuccessOutput::UpdateBranch { number, rebase } => {
-            write!(
+            writeln!(
                 stdout,
-                "pr #{number} branch updated ({})",
+                "#{number} branch updated ({})",
                 if *rebase { "rebase" } else { "merge" }
             )
             .map_err(|_| AppError::output())?;
-            writeln!(stdout).map_err(|_| AppError::output())?;
         }
         SuccessOutput::Checkout { number } => {
-            writeln!(stdout, "pr #{number} checked out").map_err(|_| AppError::output())?;
+            writeln!(stdout, "#{number} checked out").map_err(|_| AppError::output())?;
+        }
+        SuccessOutput::GitLabCheckout(checkout) => {
+            writeln!(stdout, "!{} checked out", checkout.number).map_err(|_| AppError::output())?;
         }
         SuccessOutput::GitLabAction { number, action } => {
-            write!(stdout, "merge request !{number} ").map_err(|_| AppError::output())?;
+            write!(stdout, "!{number} ").map_err(|_| AppError::output())?;
             write_safe(stdout, action, false)?;
             writeln!(stdout).map_err(|_| AppError::output())?;
         }
-        SuccessOutput::ProviderData(value) => {
-            let json = serde_json::to_string(value).map_err(|_| AppError::output())?;
-            write_safe(stdout, &json, false)?;
-            writeln!(stdout).map_err(|_| AppError::output())?;
-        }
+        SuccessOutput::GitLabData(data) => write_gitlab_data(stdout, data)?,
     }
     Ok(())
 }
@@ -195,27 +192,11 @@ fn write_pull_request(
         write!(stdout, " [draft]").map_err(|_| AppError::output())?;
     }
     writeln!(stdout).map_err(|_| AppError::output())?;
-    write_safe(stdout, &pr.url, false)?;
-    writeln!(stdout).map_err(|_| AppError::output())?;
     write!(stdout, "Branch: ").map_err(|_| AppError::output())?;
     write_safe(stdout, &pr.head_ref, false)?;
     write!(stdout, " -> ").map_err(|_| AppError::output())?;
     write_safe(stdout, &pr.base_ref, false)?;
     writeln!(stdout).map_err(|_| AppError::output())?;
-    write!(stdout, "Author: ").map_err(|_| AppError::output())?;
-    write_safe(stdout, &pr.author, false)?;
-    writeln!(stdout).map_err(|_| AppError::output())?;
-    write!(stdout, "Created: ").map_err(|_| AppError::output())?;
-    write_safe(stdout, &pr.created_at, false)?;
-    writeln!(stdout).map_err(|_| AppError::output())?;
-    write!(stdout, "Updated: ").map_err(|_| AppError::output())?;
-    write_safe(stdout, &pr.updated_at, false)?;
-    writeln!(stdout).map_err(|_| AppError::output())?;
-    if let Some(merged_at) = &pr.merged_at {
-        write!(stdout, "Merged: ").map_err(|_| AppError::output())?;
-        write_safe(stdout, merged_at, false)?;
-        writeln!(stdout).map_err(|_| AppError::output())?;
-    }
     if let Some(mergeable) = &pr.mergeable {
         write!(stdout, "Mergeable: ").map_err(|_| AppError::output())?;
         write_safe(stdout, mergeable, false)?;
@@ -228,7 +209,27 @@ fn write_pull_request(
     }
     write_names(stdout, "Labels", &pr.labels)?;
     write_names(stdout, "Assignees", &pr.assignees)?;
+    write_safe(stdout, &pr.body, true)?;
+    writeln!(stdout).map_err(|_| AppError::output())
+}
+
+fn write_gitlab_pull_request(
+    stdout: &mut impl Write,
+    pr: &crate::domain::PullRequest,
+) -> Result<(), AppError> {
+    write!(stdout, "!{} ", pr.number).map_err(|_| AppError::output())?;
+    write_safe(stdout, &pr.title, false)?;
+    write!(stdout, " [{}]", pr_state(pr.state)).map_err(|_| AppError::output())?;
+    if pr.draft {
+        write!(stdout, " [draft]").map_err(|_| AppError::output())?;
+    }
     writeln!(stdout).map_err(|_| AppError::output())?;
+    write!(stdout, "Branch: ").map_err(|_| AppError::output())?;
+    write_safe(stdout, &pr.head_ref, false)?;
+    write!(stdout, " -> ").map_err(|_| AppError::output())?;
+    write_safe(stdout, &pr.base_ref, false)?;
+    writeln!(stdout).map_err(|_| AppError::output())?;
+    write_names(stdout, "Labels", &pr.labels)?;
     write_safe(stdout, &pr.body, true)?;
     writeln!(stdout).map_err(|_| AppError::output())
 }
@@ -243,8 +244,6 @@ fn write_pull_request_status(
     if status.draft {
         write!(stdout, " [draft]").map_err(|_| AppError::output())?;
     }
-    writeln!(stdout).map_err(|_| AppError::output())?;
-    write_safe(stdout, &status.url, false)?;
     writeln!(stdout).map_err(|_| AppError::output())?;
     write!(stdout, "Branch: ").map_err(|_| AppError::output())?;
     write_safe(stdout, &status.head_ref, false)?;
@@ -278,10 +277,6 @@ fn write_pull_request_status(
                 write_safe(stdout, bucket, false)?;
                 write!(stdout, ")").map_err(|_| AppError::output())?;
             }
-            if let Some(link) = &check.link {
-                write!(stdout, " ").map_err(|_| AppError::output())?;
-                write_safe(stdout, link, false)?;
-            }
             writeln!(stdout).map_err(|_| AppError::output())?;
         }
     }
@@ -305,15 +300,7 @@ fn write_names(stdout: &mut impl Write, label: &str, names: &[String]) -> Result
 fn write_issue_header(stdout: &mut impl Write, issue: &Issue) -> Result<(), AppError> {
     write!(stdout, "#{} ", issue.number).map_err(|_| AppError::output())?;
     write_safe(stdout, &issue.title, false)?;
-    writeln!(stdout, " [{}]", state(issue.state)).map_err(|_| AppError::output())?;
-    write_safe(stdout, &issue.url, false)?;
-    writeln!(stdout).map_err(|_| AppError::output())?;
-    write!(stdout, "Created: ").map_err(|_| AppError::output())?;
-    write_safe(stdout, &issue.created_at, false)?;
-    writeln!(stdout).map_err(|_| AppError::output())?;
-    write!(stdout, "Updated: ").map_err(|_| AppError::output())?;
-    write_safe(stdout, &issue.updated_at, false)?;
-    writeln!(stdout).map_err(|_| AppError::output())
+    writeln!(stdout, " [{}]", state(issue.state)).map_err(|_| AppError::output())
 }
 
 fn write_issue(stdout: &mut impl Write, issue: &Issue) -> Result<(), AppError> {
@@ -327,14 +314,27 @@ fn write_related_issue(
     label: &str,
     issue: &crate::domain::RelatedIssue,
 ) -> Result<(), AppError> {
-    write!(stdout, "{label}: #{} ", issue.number).map_err(|_| AppError::output())?;
+    let repository = issue
+        .url
+        .strip_prefix("https://github.com/")
+        .and_then(|url| url.split_once("/issues/").map(|(repository, _)| repository));
+    write!(stdout, "{label}: ").map_err(|_| AppError::output())?;
+    if let Some(repository) = repository {
+        write_safe(stdout, repository, false)?;
+        write!(stdout, "#").map_err(|_| AppError::output())?;
+    } else {
+        write!(stdout, "#").map_err(|_| AppError::output())?;
+    }
+    write!(stdout, "{} ", issue.number).map_err(|_| AppError::output())?;
     write_safe(stdout, &issue.title, false)?;
-    write!(stdout, " [{}] ", state(issue.state)).map_err(|_| AppError::output())?;
-    write_safe(stdout, &issue.url, false)?;
-    writeln!(stdout).map_err(|_| AppError::output())
+    writeln!(stdout, " [{}]", state(issue.state)).map_err(|_| AppError::output())
 }
 
-fn write_safe(stdout: &mut impl Write, value: &str, preserve_layout: bool) -> Result<(), AppError> {
+pub(super) fn write_safe(
+    stdout: &mut impl Write,
+    value: &str,
+    preserve_layout: bool,
+) -> Result<(), AppError> {
     for character in value.chars() {
         if preserve_layout && matches!(character, '\n' | '\t') {
             stdout
@@ -349,6 +349,133 @@ fn write_safe(stdout: &mut impl Write, value: &str, preserve_layout: bool) -> Re
         }
     }
     Ok(())
+}
+
+fn write_issue_mutation(
+    stdout: &mut impl Write,
+    mutation: &crate::output::IssueMutation,
+) -> Result<(), AppError> {
+    write!(stdout, "#{} ", mutation.issue.number).map_err(|_| AppError::output())?;
+    writeln!(
+        stdout,
+        "{}",
+        mutation_label(mutation.action, mutation.unchanged)
+    )
+    .map_err(|_| AppError::output())
+}
+
+fn write_pull_request_mutation(
+    stdout: &mut impl Write,
+    mutation: &crate::output::PullRequestMutation,
+) -> Result<(), AppError> {
+    if mutation.gitlab {
+        write!(stdout, "!{} ", mutation.pull_request.number).map_err(|_| AppError::output())?;
+    } else {
+        write!(stdout, "#{} ", mutation.pull_request.number).map_err(|_| AppError::output())?;
+    }
+    writeln!(
+        stdout,
+        "{}",
+        mutation_label(mutation.action, mutation.unchanged)
+    )
+    .map_err(|_| AppError::output())
+}
+
+fn mutation_label(action: crate::output::MutationAction, unchanged: bool) -> &'static str {
+    if unchanged {
+        "unchanged"
+    } else {
+        match action {
+            crate::output::MutationAction::Created => "created",
+            crate::output::MutationAction::Updated => "updated",
+            crate::output::MutationAction::Closed => "closed",
+            crate::output::MutationAction::Reopened => "reopened",
+        }
+    }
+}
+
+fn write_gitlab_data(
+    stdout: &mut impl Write,
+    data: &crate::output::GitLabData,
+) -> Result<(), AppError> {
+    let items = data
+        .value
+        .as_array()
+        .ok_or_else(AppError::provider_response)?;
+    if items.is_empty() {
+        writeln!(stdout, "!{}: no {}", data.number, data.operation)
+            .map_err(|_| AppError::output())?;
+        return Ok(());
+    }
+    for item in items {
+        match data.operation {
+            "approvers" => {
+                let user = item.get("user").unwrap_or(item);
+                write!(stdout, "!{} approver #", data.number).map_err(|_| AppError::output())?;
+                write_json_id(stdout, user.get("id").or_else(|| item.get("id")))?;
+                write!(stdout, " ").map_err(|_| AppError::output())?;
+                let name = user
+                    .get("username")
+                    .or_else(|| user.get("name"))
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(AppError::provider_response)?;
+                write_safe(stdout, name, false)?;
+                writeln!(stdout).map_err(|_| AppError::output())?;
+            }
+            "issues" => {
+                let issue = item.get("issue").unwrap_or(item);
+                write!(stdout, "!{} issue ", data.number).map_err(|_| AppError::output())?;
+                let reference = issue
+                    .pointer("/references/full")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(AppError::provider_response)?;
+                write_safe(stdout, reference, false)?;
+                write!(stdout, " ").map_err(|_| AppError::output())?;
+                let title = issue
+                    .get("title")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(AppError::provider_response)?;
+                write_safe(stdout, title, false)?;
+                writeln!(stdout).map_err(|_| AppError::output())?;
+            }
+            "notes" => {
+                let discussion_id = item.get("id").ok_or_else(AppError::provider_response)?;
+                let notes = item
+                    .get("notes")
+                    .and_then(serde_json::Value::as_array)
+                    .ok_or_else(AppError::provider_response)?;
+                for note in notes {
+                    write!(stdout, "!{} note #", data.number).map_err(|_| AppError::output())?;
+                    write_json_id(stdout, Some(discussion_id))?;
+                    write!(stdout, "/").map_err(|_| AppError::output())?;
+                    write_json_id(stdout, note.get("id"))?;
+                    write!(stdout, ": ").map_err(|_| AppError::output())?;
+                    let body = note
+                        .get("body")
+                        .and_then(serde_json::Value::as_str)
+                        .ok_or_else(AppError::provider_response)?;
+                    write_safe(stdout, body, true)?;
+                    writeln!(stdout).map_err(|_| AppError::output())?;
+                }
+            }
+            _ => return Err(AppError::provider_response()),
+        }
+    }
+    Ok(())
+}
+
+fn write_json_id(
+    stdout: &mut impl Write,
+    value: Option<&serde_json::Value>,
+) -> Result<(), AppError> {
+    let value = value.ok_or_else(AppError::provider_response)?;
+    if let Some(id) = value.as_str() {
+        write_safe(stdout, id, false)
+    } else if let Some(id) = value.as_u64() {
+        write!(stdout, "{id}").map_err(|_| AppError::output())
+    } else {
+        Err(AppError::provider_response())
+    }
 }
 
 fn state(state: crate::domain::IssueState) -> &'static str {

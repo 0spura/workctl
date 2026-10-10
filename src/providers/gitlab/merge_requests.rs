@@ -50,7 +50,7 @@ impl GitLabMergeRequests {
         number: u64,
         options: &[String],
         description: Option<&str>,
-    ) -> Result<PullRequest, AppError> {
+    ) -> Result<(PullRequest, bool), AppError> {
         if !options.is_empty() {
             let mut args = vec![
                 "mr".to_owned(),
@@ -66,6 +66,7 @@ impl GitLabMergeRequests {
             self.set_description(number, description)?;
         }
         self.view(number)
+            .map(|pull_request| (pull_request, options.is_empty() && description.is_none()))
             .map_err(|_| AppError::gitlab_write_uncertain())
     }
 
@@ -170,7 +171,10 @@ impl GitLabMergeRequests {
             "json".to_owned(),
         ];
         let output = super::run_glab(&args)?;
-        serde_json::from_slice(&output).map_err(|_| AppError::provider_response())
+        let value: Value =
+            serde_json::from_slice(&output).map_err(|_| AppError::provider_response())?;
+        validate_related_data(operation, &value)?;
+        Ok(value)
     }
 
     pub fn list_notes(&self, number: u64, filters: &[String]) -> Result<Value, AppError> {
@@ -186,7 +190,10 @@ impl GitLabMergeRequests {
         ];
         args.extend_from_slice(filters);
         let output = super::run_glab(&args)?;
-        serde_json::from_slice(&output).map_err(|_| AppError::provider_response())
+        let value: Value =
+            serde_json::from_slice(&output).map_err(|_| AppError::provider_response())?;
+        validate_notes(&value)?;
+        Ok(value)
     }
 
     pub fn update_note(&self, number: u64, note_id: u64, body: &str) -> Result<(), AppError> {
@@ -297,6 +304,69 @@ impl GitLabMergeRequests {
             .ok_or_else(|| AppError::invalid_input("GitLab repository URL is invalid"))?;
         Ok(path.trim_end_matches(".git").replace('/', "%2F"))
     }
+}
+
+fn validate_related_data(operation: &str, value: &Value) -> Result<(), AppError> {
+    let items = value.as_array().ok_or_else(AppError::provider_response)?;
+    for item in items {
+        let valid = match operation {
+            "approvers" => {
+                let user = item.get("user").unwrap_or(item);
+                valid_id(user.get("id").or_else(|| item.get("id")))
+                    && user
+                        .get("username")
+                        .or_else(|| user.get("name"))
+                        .and_then(Value::as_str)
+                        .is_some_and(|name| !name.trim().is_empty())
+            }
+            "issues" => {
+                let issue = item.get("issue").unwrap_or(item);
+                valid_id(issue.get("iid").or_else(|| issue.get("id")))
+                    && issue
+                        .get("title")
+                        .and_then(Value::as_str)
+                        .is_some_and(|title| !title.trim().is_empty())
+                    && issue
+                        .pointer("/references/full")
+                        .and_then(Value::as_str)
+                        .is_some_and(|reference| !reference.trim().is_empty())
+            }
+            _ => false,
+        };
+        if !valid {
+            return Err(AppError::provider_response());
+        }
+    }
+    Ok(())
+}
+
+fn validate_notes(value: &Value) -> Result<(), AppError> {
+    let discussions = value.as_array().ok_or_else(AppError::provider_response)?;
+    for discussion in discussions {
+        if !valid_id(discussion.get("id")) {
+            return Err(AppError::provider_response());
+        }
+        let notes = discussion
+            .get("notes")
+            .and_then(Value::as_array)
+            .filter(|notes| !notes.is_empty())
+            .ok_or_else(AppError::provider_response)?;
+        for note in notes {
+            if !valid_id(note.get("id")) || note.get("body").and_then(Value::as_str).is_none() {
+                return Err(AppError::provider_response());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn valid_id(value: Option<&Value>) -> bool {
+    value.is_some_and(|value| {
+        value.as_u64().is_some()
+            || value
+                .as_str()
+                .is_some_and(|identifier| !identifier.trim().is_empty())
+    })
 }
 
 fn map_summary(value: &Value) -> Result<PullRequestSummary, AppError> {

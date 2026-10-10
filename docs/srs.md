@@ -35,7 +35,7 @@ Actors: a developer or coding agent running `workctl` locally. Observable behavi
 - `decisionModel.baseUrl` or the `DECISION_MODEL_BASE_URL` override configures only local services and must target loopback. Hosted endpoints are fixed. Model/configuration/credential/output failures prevent the issue write.
 - `--milestone @current` assigns the open GitHub milestone with the nearest due date today or later. Overdue and undated milestones are ignored. If no milestone qualifies, or two milestones tie for the nearest eligible due date, creation fails with `invalid_input` before any write.
 - Omitting `--milestone` leaves the milestone unset and performs no milestone lookup, so no milestone is ever assigned implicitly. Any other value is a literal milestone name passed through unchanged. Issue edits never apply a default; omitted native metadata remains unchanged. Semantic declarations are a separate proposed extension (RF-WI.5), not part of the implemented create contract.
-- The command returns the created issue's number, title, body, state, URL, and timestamps. Missing body creates an empty body; no interactive prompt is opened.
+- Explicit JSON returns the created issue's number, title, body, state, URL, and timestamps; default text acknowledges creation (RF-OUT.1). Missing body creates an empty body; no interactive prompt is opened.
 - Attachments use documented `gh issue create --attach` and require GitHub CLI 2.99.0 or newer. The version gate runs only when attachments are requested. If create fails during attachment upload, return `attachment_create_uncertain` because the issue may already exist; do not retry automatically.
 
 **Acceptance:** `--label @auto` selects the configured model only when present, combines selected labels with explicit labels, never forwards the sentinel to the code-host provider, and adds only scores >= 0.8. Missing hosted credentials/configuration and invalid model responses fail before the issue write. `--remove-label @auto` is invalid. Local URLs outside loopback are rejected.
@@ -89,7 +89,7 @@ Actors: a developer or coding agent running `workctl` locally. Observable behavi
 
 - GitHub `issue blockers NUMBER` returns only complete paths of currently open blocking issues leading to the target. Arrow direction is blocker-to-blocked, e.g. `#18 -> #29 -> #30`. Cross-repository references use `OWNER/REPO#NUMBER`; same-repository references use `#NUMBER`.
 - Closed targets return no chains. Closed blockers stop propagation and are omitted. Parent/sub-issue relations are not traversed. An empty result means no open blocker chain was observed; it does not assert that other criteria for execution are satisfied.
-- Default JSON output is an array of chain strings, with `[]` when empty. Text output prints one chain per line and emits no bytes when empty. No titles, bodies, relation objects, or successful status boilerplate are included.
+- Explicit JSON output is an array of chain strings, with `[]` when empty. Default text prints one chain per line and emits no bytes when empty. No titles, bodies, relation objects, or successful status boilerplate are included.
 - Explore only direct `blockedBy` edges. Bound the complete traversal to 20 issue reads, 500 edges, 20 returned chains, and depth 20, including pagination queries in the read budget. Connections page at 100 and each is limited to 1,000 records. Exceeding a bound returns `relationship_limit` with no partial output; provider/authentication errors and malformed/cyclic responses also fail without successful output.
 - Sort complete chains deterministically. Reads span multiple requests and are not an atomic snapshot; conflicting observed issue states fail with `conflict`.
 
@@ -210,7 +210,7 @@ Edit regressions `project_auto_edit_selects_only_requested_fields_and_preserves_
 - `--milestone @current` assigns the open GitHub milestone with the nearest due date today or later. Overdue and undated milestones are ignored. If no milestone qualifies, or two milestones tie for the nearest eligible due date, creation fails with `invalid_input` before any write.
 - Omitting `--milestone` leaves the milestone unset and performs no milestone lookup, so no milestone is ever assigned implicitly. Any other value is a literal milestone name passed through unchanged. PR updates never apply a default; omitted update metadata remains unchanged.
 - `--attach FILE[#ALT]` may be repeated and uses documented `gh pr create --attach`; GitHub CLI 2.99.0 or newer is required only when attachment is requested. On an attachment-create failure, return `attachment_create_uncertain` because the PR may already exist.
-- The command returns the created pull request as a full record (see RNF-DOM.1).
+- Explicit JSON returns the created pull request as a full record (see RNF-DOM.1); default text acknowledges creation (RF-OUT.1).
 - Errors: `invalid_input` for blank title, body source conflict, invalid body text, or `@current` without an eligible or untied nearest milestone; `dependency_version` for attachments with older `gh`; `attachment_create_uncertain` when attachment create fails; `github_cli` for other `gh pr create` failures; `provider_response` for a created URL with no pull-request number.
 
 **Acceptance:** Create forwards explicitly requested metadata and attachment flags, preserves title and supplied body (including `--closes` suffix), and returns the created pull request; omitting `--milestone` makes no milestone request, `--milestone @current` without an eligible or untied nearest milestone fails with `invalid_input` before the write, and attachments with `gh` <2.99.0 fail before PR creation. A blank title or body-source conflict fails before `gh`.
@@ -328,7 +328,7 @@ Edit regressions `project_auto_edit_selects_only_requested_fields_and_preserves_
 - `pr edit NUMBER --state closed|open` changes state through native `gh pr close|reopen`; omission preserves state. Merged PRs reject an explicit state request before mutation.
 - State may be combined with ordinary edits. Ordinary fields run before the state operation, which is followed by the remote branch deletion when requested; an explicitly supplied transition comment is posted last through stdin. `--delete-branch` is valid only with `--state closed`, removes only the remote head branch as defined by RF-PR.7, and `--comment` requires `--state`.
 - State-only edits are valid and do not call `gh pr edit`. A state request may be a no-op if state already matches; explicit close modifiers are still honored.
-- The sequence is nontransactional, never retried or rolled back, and returns the full PR record after success. Failure after an acknowledged write returns `partial_success` with target identity and ordered completed/pending operations. Closed-PR edit failures can occur before an accompanying reopen; workctl does not reorder writes.
+- The sequence is nontransactional, never retried or rolled back. Explicit JSON returns the full PR record after success; default text reports identity and outcome. Failure after an acknowledged write returns `partial_success` with target identity and ordered completed/pending operations. Closed-PR edit failures can occur before an accompanying reopen; workctl does not reorder writes.
 
 **Acceptance:** State-only, combined edit/state and transition comments follow the documented order; invalid modifiers and merged-PR state requests fail before mutation. Later failures report partial progress without success output, retry or raw diagnostics.
 **Verification:** `tests/cli_prs.rs` covers state transitions, combined ordering, closed and merged PR boundaries, comment stdin, partial failure and final readback.
@@ -631,11 +631,11 @@ Pull-request unlocking is now `pr lock NUMBER --undo`; there is no `pr unlock` a
 ### RF-CFG.7: Output format default
 **Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.1
 
-- `defaults.output.format` accepts `json` or `text` and selects the success output format for every command, in both provider domains.
-- Precedence is explicit `--format`, then `defaults.output.format`, then `json`. Errors remain one JSON object on stderr regardless of the selected success format.
+- `defaults.output.format` accepts `json` or `text` and selects success and error output for every command, in both provider domains.
+- Precedence is explicit `--format`, then `defaults.output.format`, then `text`. Invalid configuration fails safely in text unless a valid explicit JSON format was selected.
 - An unsupported value fails closed as a `config` error before provider access.
 
-**Acceptance:** A configured format changes success output for an invocation that omits `--format`, and `--format` restores the explicit choice.
+**Acceptance:** Configuration selects output for invocations without `--format`; an explicit format overrides it. Without either selection, successes and errors use text.
 **Verification:** Config unit tests and CLI integration tests asserting the output stream.
 
 ### RF-CFG.8: GitHub list limit default
@@ -661,13 +661,15 @@ Pull-request unlocking is now `pr lock NUMBER --undo`; there is no `pr unlock` a
 ### RF-OUT.1: Output contract
 **Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CLI.1
 
-- Success output is compact JSON by default; `--format text` selects human-readable output, and `defaults.output.format` selects the same format for every invocation (RF-CFG.7).
-- Text output escapes terminal control characters in provider values; issue-body newlines and tabs remain layout characters.
-- Errors are one JSON object on stderr with a stable `code` and safe `message`; partial success may include structured `details` describing the affected resource and completed/pending operations. All failures exit nonzero and leave stdout empty.
+- Success output is compact text by default. `--format json` or `defaults.output.format: "json"` explicitly selects the existing JSON schemas (RF-CFG.7).
+- Mutations emit identity and outcome only: `#123 created` or GitLab MR `!5 updated`. No-ops report `unchanged`; queued operations report `queued`. Batch writes emit one acknowledgement per completed target.
+- Lists retain identity, title, and state. Views, diffs, notes, and discussions retain requested content; automatic URLs, timestamps, and resource dumps are omitted from text acknowledgements.
+- Text output escapes terminal control characters in provider values; requested content retains newlines and tabs.
+- Text errors use `code: message` on stderr. Explicit JSON errors retain their stable schema. Partial success retains resource identity, completed/pending operations, and nested failed-item progress without dumping the resource body. All failures exit nonzero and leave stdout empty.
 - User-facing errors do not include raw provider stderr, credentials, stack traces, or internal paths. Partial-success error types remain provider-neutral.
 
-**Acceptance:** Success and failure tests assert output stream, format, and exit status; raw fixture stderr never appears in the error response.
-**Verification:** CLI integration tests.
+**Acceptance:** Tests assert default text, explicit JSON compatibility, truthful no-op and queued outcomes, batch acknowledgements, retained read content, safe partial-success recovery, output streams, and exit status. Raw provider diagnostics and terminal controls never reach error output.
+**Verification:** Focused CLI integration suites, output unit tests, and built-binary fixture scenarios.
 
 ## 2. Non-functional requirements
 

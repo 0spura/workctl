@@ -151,7 +151,7 @@ pub(super) fn decision_model() -> Result<crate::decision_model::DecisionModel, A
     crate::decision_model::DecisionModel::from_settings(&settings)
 }
 
-/// Configured success output format, when the files select one.
+/// Configured output format, when the files select one.
 pub(super) fn output_format_default() -> Result<Option<OutputFormatSetting>, AppError> {
     Ok(project_config()?
         .defaults
@@ -159,16 +159,16 @@ pub(super) fn output_format_default() -> Result<Option<OutputFormatSetting>, App
         .and_then(|output| output.format))
 }
 
-/// Success output format: explicit `--format`, then `defaults.output.format`, then JSON.
-pub(super) fn resolve_output_format(
+/// Output format: explicit `--format`, then `defaults.output.format`, then compact text.
+pub(crate) fn resolve_output_format(
     explicit: Option<OutputFormat>,
 ) -> Result<OutputFormat, AppError> {
     if let Some(format) = explicit {
         return Ok(format);
     }
     Ok(match output_format_default()? {
-        Some(OutputFormatSetting::Json) | None => OutputFormat::Json,
-        Some(OutputFormatSetting::Text) => OutputFormat::Text,
+        Some(OutputFormatSetting::Json) => OutputFormat::Json,
+        Some(OutputFormatSetting::Text) | None => OutputFormat::Text,
     })
 }
 

@@ -180,6 +180,11 @@ pub(super) fn execute(globals: &GlobalArgs, args: EditArgs) -> Result<SuccessOut
         attachments: args.attachments,
         expect_updated_at: args.expect_updated_at,
     };
+    let action = match transition.as_ref() {
+        Some(transition) if transition.closed => crate::output::MutationAction::Closed,
+        Some(_) => crate::output::MutationAction::Reopened,
+        None => crate::output::MutationAction::Updated,
+    };
     let mut results = Vec::with_capacity(numbers.len());
     let mut original_guard = patch.expect_updated_at.take();
     for (index, number) in numbers.iter().copied().enumerate() {
@@ -213,7 +218,7 @@ pub(super) fn execute(globals: &GlobalArgs, args: EditArgs) -> Result<SuccessOut
                     && !other_changes
                     && !plan.as_ref().is_some_and(|plan| plan.has_writes())
                 {
-                    return Ok(current);
+                    return Ok((current, true));
                 }
                 patch.expect_updated_at = Some(current.updated_at);
             } else {
@@ -233,7 +238,11 @@ pub(super) fn execute(globals: &GlobalArgs, args: EditArgs) -> Result<SuccessOut
             original_guard = patch.expect_updated_at.take();
         }
         match result {
-            Ok(issue) => results.push(issue),
+            Ok((issue, unchanged)) => results.push(crate::output::IssueMutation {
+                issue,
+                action,
+                unchanged,
+            }),
             Err(error) if index == 0 => return Err(error),
             Err(error) => {
                 let completed = numbers[..index]
@@ -253,12 +262,12 @@ pub(super) fn execute(globals: &GlobalArgs, args: EditArgs) -> Result<SuccessOut
             }
         }
     }
-    if numbers.len() == 1 {
-        Ok(SuccessOutput::Issue(
+    if results.len() == 1 {
+        Ok(SuccessOutput::IssueMutation(
             results.pop().expect("one issue result"),
         ))
     } else {
-        Ok(SuccessOutput::IssueEdits(results))
+        Ok(SuccessOutput::IssueMutations(results))
     }
 }
 

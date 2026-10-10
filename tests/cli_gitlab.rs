@@ -27,11 +27,11 @@ fn configured_code_and_work_item_providers_route_independently() {
     )
     .expect("write mixed provider config");
 
-    let issues = fixture.run(&["--repo", "owner/repo", "issue", "list"], "");
+    let issues = fixture.run_issue_json(&["issue", "list"], "");
     assert_eq!(success_json(&issues).as_array().unwrap().len(), 2);
     assert!(fixture.glab_invocations().is_empty());
 
-    let merge_requests = fixture.run(&["--repo", "group/sub/project", "mr", "list"], "");
+    let merge_requests = fixture.run_gitlab_json(&["mr", "list"], "");
     assert_eq!(
         success_json(&merge_requests)[0]["url"],
         format!("{PROJECT}/-/merge_requests/5")
@@ -62,7 +62,7 @@ fn unsupported_linear_configuration_fails_before_provider_access() {
     )
     .expect("write unsupported provider config");
 
-    let output = fixture.run(&["--repo", "owner/repo", "issue", "list"], "");
+    let output = fixture.run_gitlab_json(&["issue", "list"], "");
     assert_eq!(error_json(&output)["code"], "config");
     assert!(fixture.glab_invocations().is_empty());
     assert!(
@@ -75,7 +75,7 @@ fn unsupported_linear_configuration_fails_before_provider_access() {
 #[test]
 fn gitlab_list_forwards_every_filter_to_glab() {
     let fixture = Fixture::new();
-    let output = fixture.run_gitlab(
+    let output = fixture.run_gitlab_json(
         &[
             "issue",
             "list",
@@ -139,7 +139,7 @@ fn gitlab_list_forwards_every_filter_to_glab() {
 #[test]
 fn gitlab_view_maps_the_description_onto_the_body() {
     let fixture = Fixture::new();
-    let output = fixture.run_gitlab(&["issue", "view", "12"], "");
+    let output = fixture.run_gitlab_json(&["issue", "view", "12"], "");
 
     assert_eq!(
         fixture.glab_invocations().last().expect("glab invocation"),
@@ -153,6 +153,20 @@ fn gitlab_view_maps_the_description_onto_the_body() {
     assert_eq!(issue["state"], "open");
     assert_eq!(issue["url"], format!("{PROJECT}/-/issues/12"));
     assert_eq!(issue["created_at"], "2026-01-02T03:04:05.000Z");
+}
+
+#[test]
+fn gitlab_view_text_omits_provider_metadata_dump() {
+    let fixture = Fixture::new();
+    let output = fixture.run_gitlab(&["issue", "view", "12"], "");
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).expect("text output is UTF-8");
+    assert!(text.contains("Crash on startup"));
+    assert!(text.contains("Steps to reproduce"));
+    assert!(!text.contains("created_at"));
+    assert!(!text.contains("updated_at"));
+    assert!(!text.contains("url"));
+    assert!(!text.contains("author"));
 }
 
 #[test]
@@ -179,13 +193,13 @@ fn gitlab_state_flags_select_the_requested_state() {
 #[test]
 fn gitlab_issue_state_and_subscription_use_native_commands() {
     let fixture = Fixture::new();
-    let closed = fixture.run_gitlab(&["issue", "close", "12"], "");
+    let closed = fixture.run_gitlab_json(&["issue", "close", "12"], "");
     assert_eq!(success_json(&closed)["state"], "closed");
-    let opened = fixture.run_gitlab(&["issue", "reopen", "12"], "");
+    let opened = fixture.run_gitlab_json(&["issue", "reopen", "12"], "");
     assert_eq!(success_json(&opened)["state"], "open");
-    let subscribed = fixture.run_gitlab(&["issue", "subscribe", "12"], "");
+    let subscribed = fixture.run_gitlab_json(&["issue", "subscribe", "12"], "");
     assert_eq!(success_json(&subscribed)["state"], "subscribed");
-    let unsubscribed = fixture.run_gitlab(&["issue", "unsubscribe", "12"], "");
+    let unsubscribed = fixture.run_gitlab_json(&["issue", "unsubscribe", "12"], "");
     assert_eq!(success_json(&unsubscribed)["state"], "unsubscribed");
     assert_eq!(
         fixture.glab_invocations(),
@@ -205,7 +219,8 @@ fn gitlab_issue_state_and_subscription_use_native_commands() {
 #[test]
 fn gitlab_issue_note_sends_message_on_stdin() {
     let fixture = Fixture::new();
-    let output = fixture.run_gitlab(&["issue", "note", "12", "--message", "Investigating"], "");
+    let output =
+        fixture.run_gitlab_json(&["issue", "note", "12", "--message", "Investigating"], "");
     assert_eq!(success_json(&output)["target"], "issue");
     assert_eq!(
         fixture.glab_invocations(),
@@ -220,15 +235,15 @@ fn gitlab_issue_note_sends_message_on_stdin() {
 #[test]
 fn gitlab_grammar_rejects_github_flags_and_invalid_page() {
     let fixture = Fixture::new();
-    let unknown_flag = fixture.run_gitlab(&["issue", "list", "--limit", "5"], "");
+    let unknown_flag = fixture.run_gitlab_json(&["issue", "list", "--limit", "5"], "");
     assert_eq!(unknown_flag.status.code(), Some(2));
     assert_eq!(error_json(&unknown_flag)["code"], "invalid_input");
 
-    let invalid_page = fixture.run_gitlab(&["issue", "list", "--per-page", "101"], "");
+    let invalid_page = fixture.run_gitlab_json(&["issue", "list", "--per-page", "101"], "");
     assert_eq!(invalid_page.status.code(), Some(2));
     assert_eq!(error_json(&invalid_page)["code"], "invalid_input");
 
-    let pr_group = fixture.run_gitlab(&["pr", "list"], "");
+    let pr_group = fixture.run_gitlab_json(&["pr", "list"], "");
     assert_eq!(pr_group.status.code(), Some(2));
     let error = error_json(&pr_group);
     assert_eq!(error["code"], "invalid_input");
@@ -243,11 +258,11 @@ fn gitlab_grammar_rejects_github_flags_and_invalid_page() {
 #[test]
 fn gitlab_failures_report_stable_codes_without_provider_output() {
     let fixture = Fixture::new();
-    let unauthenticated = fixture.run_gitlab(&["issue", "list"], "auth-failure");
+    let unauthenticated = fixture.run_gitlab_json(&["issue", "list"], "auth-failure");
     assert_eq!(error_json(&unauthenticated)["code"], "authentication");
 
     let fixture = Fixture::new();
-    let failed = fixture.run_gitlab(&["issue", "list"], "list-failure");
+    let failed = fixture.run_gitlab_json(&["issue", "list"], "list-failure");
     let error = error_json(&failed);
     assert_eq!(error["code"], "gitlab_cli");
     assert_eq!(error["message"], "the GitLab CLI operation failed");
@@ -264,7 +279,7 @@ fn gitlab_failures_report_stable_codes_without_provider_output() {
 fn gitlab_rejects_an_invalid_issue_number_before_glab() {
     let fixture = Fixture::new();
     for number in ["0", "abc"] {
-        let output = fixture.run_gitlab(&["issue", "view", number], "");
+        let output = fixture.run_gitlab_json(&["issue", "view", number], "");
         assert_eq!(output.status.code(), Some(2));
         assert_eq!(error_json(&output)["code"], "invalid_input");
     }
@@ -278,7 +293,7 @@ fn rf_gl_4_gitlab_create_uses_native_flags_and_stdin_description() {
     let description_file = fixture.root.join("create-description.txt");
     std::fs::write(&description_file, description).expect("write description fixture");
     let description_path = description_file.to_str().expect("UTF-8 fixture path");
-    let output = fixture.run_gitlab(
+    let output = fixture.run_gitlab_json(
         &[
             "issue",
             "create",
@@ -356,7 +371,7 @@ fn rf_gl_5_gitlab_update_uses_native_flags_and_reads_back_the_issue() {
     let description_file = fixture.root.join("update-description.txt");
     std::fs::write(&description_file, description).expect("write description fixture");
     let description_path = description_file.to_str().expect("UTF-8 fixture path");
-    let output = fixture.run_gitlab(
+    let output = fixture.run_gitlab_json(
         &[
             "issue",
             "update",
@@ -460,7 +475,7 @@ fn gitlab_writes_reject_empty_or_invalid_changes_before_authentication() {
 #[test]
 fn gitlab_description_dash_is_data_not_an_editor_request() {
     let fixture = Fixture::new();
-    let output = fixture.run_gitlab(
+    let output = fixture.run_gitlab_json(
         &["issue", "create", "--title", "Dash", "--description", "-"],
         "",
     );
@@ -477,7 +492,7 @@ fn gitlab_description_dash_is_data_not_an_editor_request() {
 #[test]
 fn gitlab_description_patch_failure_is_reported_as_uncertain_without_diagnostics() {
     let fixture = Fixture::new();
-    let output = fixture.run_gitlab(
+    let output = fixture.run_gitlab_json(
         &[
             "issue",
             "create",
@@ -503,7 +518,7 @@ fn gitlab_write_uncertainty_hides_diagnostics_and_rejects_untrusted_create_url()
     let description = fixture.root.join("description.txt");
     std::fs::write(&description, "create").expect("write description fixture");
     let description_path = description.to_str().expect("UTF-8 fixture path");
-    let failed = fixture.run_gitlab(
+    let failed = fixture.run_gitlab_json(
         &[
             "issue",
             "create",
@@ -522,7 +537,7 @@ fn gitlab_write_uncertainty_hides_diagnostics_and_rejects_untrusted_create_url()
     let description = fixture.root.join("description.txt");
     std::fs::write(&description, "create").expect("write description fixture");
     let description_path = description.to_str().expect("UTF-8 fixture path");
-    let bad_url = fixture.run_gitlab(
+    let bad_url = fixture.run_gitlab_json(
         &[
             "issue",
             "create",
@@ -628,7 +643,7 @@ fn rf_gl_6_gitlab_auto_label_update_uses_final_text_and_rejects_missing_model_be
     assert!(!invocations.contains("--label=@auto"));
 
     let missing = Fixture::new();
-    let output = missing.run_gitlab(
+    let output = missing.run_gitlab_json(
         &[
             "issue",
             "create",
@@ -662,6 +677,8 @@ fn rf_gl_6_gitlab_auto_update_rejects_concurrent_changes_and_unlabel_marker() {
             "12",
             "--label",
             "@auto",
+            "--format",
+            "json",
         ],
         "update-stale",
         "local/test-model",
@@ -673,7 +690,7 @@ fn rf_gl_6_gitlab_auto_update_rejects_concurrent_changes_and_unlabel_marker() {
     assert!(!invocations.contains("issue update"));
 
     let invalid = Fixture::new();
-    let output = invalid.run_gitlab(&["issue", "update", "12", "--unlabel", "@auto"], "");
+    let output = invalid.run_gitlab_json(&["issue", "update", "12", "--unlabel", "@auto"], "");
     assert_eq!(error_json(&output)["code"], "invalid_input");
     assert!(invalid.glab_invocations().is_empty());
 }
@@ -699,6 +716,8 @@ fn rf_gl_6_gitlab_auto_labels_fail_closed_on_invalid_or_oversized_catalogs() {
                 "Body",
                 "--label",
                 "@auto",
+                "--format",
+                "json",
             ],
             mode,
             "local/test-model",
@@ -789,10 +808,11 @@ fn rf_cfg_6_gitlab_issue_create_explicit_assignee_replaces_configured_defaults()
     );
     let invocations = fixture.glab_invocations();
     assert!(
-        invocations.iter().any(|call| call == &format!(
-            "issue create --repo {PROJECT} --title=Override --description= --yes \
+        invocations.iter().any(|call| call
+            == &format!(
+                "issue create --repo {PROJECT} --title=Override --description= --yes \
              --label=bug --assignee=alice"
-        )),
+            )),
         "glab invocations: {invocations:?}"
     );
     assert!(

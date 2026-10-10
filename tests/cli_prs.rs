@@ -32,7 +32,7 @@ const REMOTE_BRANCH_DELETE: &str = "api --method DELETE repos/owner/repo/git/ref
 #[test]
 fn create_sends_the_body_and_flags_to_gh() {
     let fixture = Fixture::new();
-    let created = fixture.run_pr(
+    let created = fixture.run_pr_json(
         &[
             "pr",
             "create",
@@ -87,12 +87,18 @@ fn create_sends_the_body_and_flags_to_gh() {
         &"pr view 42 --repo owner/repo --json number,title,body,state,isDraft,url,baseRefName,headRefName,author,createdAt,updatedAt,mergedAt,mergeable,reviewDecision,labels,assignees"
             .to_string()
     ));
+    let compact_fixture = Fixture::new();
+    let compact = compact_fixture.run_pr(&["pr", "create", "--title", "Private details"], "");
+    assert_eq!(
+        String::from_utf8(compact.stdout).expect("UTF-8 text output"),
+        "#42 created\n"
+    );
 }
 
 #[test]
 fn attachments_are_forwarded_and_require_a_supported_gh() {
     let fixture = Fixture::new();
-    let created = fixture.run_pr(
+    let created = fixture.run_pr_json(
         &[
             "pr",
             "create",
@@ -111,13 +117,13 @@ fn attachments_are_forwarded_and_require_a_supported_gh() {
             .to_string()
     ));
 
-    let edited = fixture.run_pr(&["pr", "edit", "42", "--attach", "clip.mp4"], "");
+    let edited = fixture.run_pr_json(&["pr", "edit", "42", "--attach", "clip.mp4"], "");
     assert_eq!(success_json(&edited)["number"], 42);
     let lines = gh_lines(&fixture);
     assert!(lines.contains(&"pr edit 42 --repo owner/repo --attach clip.mp4".to_string()));
 
     let old = Fixture::new();
-    let rejected = old.run_pr(
+    let rejected = old.run_pr_json(
         &[
             "pr",
             "create",
@@ -138,7 +144,7 @@ fn attachments_are_forwarded_and_require_a_supported_gh() {
 #[test]
 fn failed_attachment_create_warns_to_check_remote_without_retrying() {
     let fixture = Fixture::new();
-    let output = fixture.run_pr(
+    let output = fixture.run_pr_json(
         &["pr", "create", "--title", "Media", "--attach", "screen.png"],
         "attachment-create-failure",
     );
@@ -169,7 +175,7 @@ fn pr_create_keeps_the_body_explicit_and_metadata_optional() {
 #[test]
 fn list_forwards_filters_and_normalizes_summaries() {
     let fixture = Fixture::new();
-    let filtered = fixture.run_pr(
+    let filtered = fixture.run_pr_json(
         &[
             "pr",
             "list",
@@ -200,7 +206,7 @@ fn list_forwards_filters_and_normalizes_summaries() {
     assert_eq!(filtered[0]["state"], "open");
     assert_eq!(filtered[1]["draft"], true);
 
-    let all = fixture.run_pr(&["pr", "list"], "");
+    let all = fixture.run_pr_json(&["pr", "list"], "");
     let all = success_json(&all);
     let all = all.as_array().expect("pr list array");
     assert_eq!(all.len(), 3);
@@ -220,7 +226,7 @@ fn list_forwards_filters_and_normalizes_summaries() {
 #[test]
 fn view_returns_a_pull_request_or_reports_it_is_not_one() {
     let fixture = Fixture::new();
-    let shown = fixture.run_pr(&["pr", "view", "42"], "");
+    let shown = fixture.run_pr_json(&["pr", "view", "42"], "");
     let shown = success_json(&shown);
     assert_eq!(shown["number"], 42);
     assert_eq!(shown["body"], "PR body");
@@ -231,7 +237,7 @@ fn view_returns_a_pull_request_or_reports_it_is_not_one() {
     assert_eq!(shown["labels"], json!(["bug"]));
     assert_eq!(shown["assignees"], json!(["hubot"]));
 
-    let missing = fixture.run_pr(&["pr", "view", "42"], "pr-view-failure");
+    let missing = fixture.run_pr_json(&["pr", "view", "42"], "pr-view-failure");
     assert_eq!(error_json(&missing)["code"], "not_pull_request");
 }
 
@@ -239,7 +245,7 @@ fn view_returns_a_pull_request_or_reports_it_is_not_one() {
 fn checks_parse_failing_reports_and_treat_missing_checks_as_empty() {
     let fixture = Fixture::new();
     // `gh pr checks` exits 1 for failing checks while still printing a valid report.
-    let failing = fixture.run_pr(&["pr", "checks", "42", "--required"], "checks-failing");
+    let failing = fixture.run_pr_json(&["pr", "checks", "42", "--required"], "checks-failing");
     let failing = success_json(&failing);
     let checks = failing.as_array().expect("checks array");
     assert_eq!(checks.len(), 2);
@@ -250,7 +256,7 @@ fn checks_parse_failing_reports_and_treat_missing_checks_as_empty() {
     assert_eq!(checks[1]["state"], "failure");
 
     // `no checks reported` on stderr with exit 1 is an empty report, not a failure.
-    let none = fixture.run_pr(&["pr", "checks", "42"], "checks-none");
+    let none = fixture.run_pr_json(&["pr", "checks", "42"], "checks-none");
     assert_eq!(success_json(&none), json!([]));
 
     let lines = gh_lines(&fixture);
@@ -270,7 +276,7 @@ fn checks_parse_failing_reports_and_treat_missing_checks_as_empty() {
 #[test]
 fn checks_watch_preserves_failed_reports_and_bounds_wait_time() {
     let fixture = Fixture::new();
-    let watched = fixture.run_pr(
+    let watched = fixture.run_pr_json(
         &[
             "pr",
             "checks",
@@ -290,7 +296,7 @@ fn checks_watch_preserves_failed_reports_and_bounds_wait_time() {
     assert!(gh_lines(&fixture).contains(
         &"pr checks 42 --repo owner/repo --required --watch --interval 4 --fail-fast --json name,state,bucket,description,link,workflow".to_string()
     ));
-    let pending = fixture.run_pr(
+    let pending = fixture.run_pr_json(
         &["pr", "checks", "42", "--watch", "--watch-timeout", "3"],
         "checks-watch-pending",
     );
@@ -298,7 +304,7 @@ fn checks_watch_preserves_failed_reports_and_bounds_wait_time() {
     assert_eq!(pending_checks[0]["state"], "pending");
     assert_eq!(pending_checks[0]["bucket"], "pending");
 
-    let timed_out = fixture.run_pr(
+    let timed_out = fixture.run_pr_json(
         &["pr", "checks", "42", "--watch", "--watch-timeout", "1"],
         "checks-watch-timeout",
     );
@@ -328,7 +334,7 @@ fn checks_watch_controls_require_watch_and_valid_bounds() {
 #[test]
 fn status_combines_mergeability_review_and_required_checks() {
     let fixture = Fixture::new();
-    let output = fixture.run_pr(&["pr", "status", "42"], "");
+    let output = fixture.run_pr_json(&["pr", "status", "42"], "");
     let status = success_json(&output);
     assert_eq!(status["number"], 42);
     assert_eq!(status["state"], "open");
@@ -371,13 +377,13 @@ fn status_combines_mergeability_review_and_required_checks() {
 #[test]
 fn status_keeps_empty_checks_inconclusive_and_stops_for_non_pull_requests() {
     let fixture = Fixture::new();
-    let no_checks = fixture.run_pr(&["pr", "status", "42"], "checks-none");
+    let no_checks = fixture.run_pr_json(&["pr", "status", "42"], "checks-none");
     let no_checks = success_json(&no_checks);
     assert_eq!(no_checks["required_checks"], json!([]));
     assert!(no_checks.get("ready").is_none());
 
     let missing_fixture = Fixture::new();
-    let missing = missing_fixture.run_pr(&["pr", "status", "42"], "pr-view-failure");
+    let missing = missing_fixture.run_pr_json(&["pr", "status", "42"], "pr-view-failure");
     assert_eq!(error_json(&missing)["code"], "not_pull_request");
     assert!(missing.stdout.is_empty());
     assert!(
@@ -390,13 +396,13 @@ fn status_keeps_empty_checks_inconclusive_and_stops_for_non_pull_requests() {
 #[test]
 fn edit_applies_a_body_change_and_rejects_a_stale_write() {
     let fixture = Fixture::new();
-    let appended = fixture.run_pr(&["pr", "edit", "42", "--append-body", "extra"], "");
+    let appended = fixture.run_pr_json(&["pr", "edit", "42", "--append-body", "extra"], "");
     let appended = success_json(&appended);
     assert_eq!(appended["number"], 42);
     // The body is appended to the fetched body, not replaced.
     assert_eq!(gh_input(&fixture), "PR body\nextra");
 
-    let stale = fixture.run_pr(
+    let stale = fixture.run_pr_json(
         &[
             "pr",
             "edit",
@@ -427,7 +433,7 @@ fn edit_applies_a_body_change_and_rejects_a_stale_write() {
 #[test]
 fn edit_manages_closing_references_in_the_body() {
     let fixture = Fixture::new();
-    let linked = fixture.run_pr(
+    let linked = fixture.run_pr_json(
         &[
             "pr",
             "edit",
@@ -447,7 +453,7 @@ fn edit_manages_closing_references_in_the_body() {
     assert!(gh_lines(&fixture).contains(&"pr edit 42 --repo owner/repo --body-file -".to_string()));
 
     // A fetched body already carrying closing lines loses only the named reference.
-    let unlinked = fixture.run_pr(
+    let unlinked = fixture.run_pr_json(
         &["pr", "edit", "42", "--remove-closes", "other/repo#6"],
         "pr-body-closes",
     );
@@ -460,14 +466,32 @@ fn edit_manages_closing_references_in_the_body() {
     // A reference this body does not close leaves the body alone, so no write is sent.
     fs::remove_file(&fixture.log).expect("clear gh argument log");
     let unchanged = fixture.run_pr(&["pr", "edit", "42", "--remove-closes", "7"], "");
-    success_json(&unchanged);
+    assert!(unchanged.status.success());
+    assert_eq!(
+        String::from_utf8(unchanged.stdout).expect("UTF-8 text output"),
+        "#42 unchanged\n"
+    );
     let lines = gh_lines(&fixture);
     assert!(
         !lines.iter().any(|line| line.starts_with("pr edit")),
         "actual gh calls: {lines:?}"
     );
+    let already_closed_fixture = Fixture::new();
+    let already_closed =
+        already_closed_fixture.run_pr(&["pr", "edit", "42", "--closes", "7"], "pr-body-closes");
+    assert!(already_closed.status.success());
+    assert_eq!(
+        String::from_utf8(already_closed.stdout).expect("UTF-8 text output"),
+        "#42 unchanged\n"
+    );
+    assert!(
+        !gh_lines(&already_closed_fixture)
+            .iter()
+            .any(|line| line.starts_with("pr edit")),
+        "the already-present closing line must not be rewritten"
+    );
 
-    let conflicting = fixture.run_pr(
+    let conflicting = fixture.run_pr_json(
         &["pr", "edit", "42", "--closes", "7", "--remove-closes", "7"],
         "",
     );
@@ -477,7 +501,7 @@ fn edit_manages_closing_references_in_the_body() {
 #[test]
 fn edit_forwards_metadata_flags_and_requires_a_change() {
     let fixture = Fixture::new();
-    let labeled = fixture.run_pr(
+    let labeled = fixture.run_pr_json(
         &[
             "pr",
             "edit",
@@ -512,14 +536,14 @@ fn edit_forwards_metadata_flags_and_requires_a_change() {
             .to_string()
     ));
 
-    let unmilestoned = fixture.run_pr(&["pr", "edit", "42", "--remove-milestone"], "");
+    let unmilestoned = fixture.run_pr_json(&["pr", "edit", "42", "--remove-milestone"], "");
     success_json(&unmilestoned);
     assert!(
         gh_lines(&fixture).contains(&"pr edit 42 --repo owner/repo --remove-milestone".to_string())
     );
 
-    let empty = fixture.run_pr(&["pr", "edit", "42"], "");
-    let conflicting = fixture.run_pr(
+    let empty = fixture.run_pr_json(&["pr", "edit", "42"], "");
+    let conflicting = fixture.run_pr_json(
         &[
             "pr",
             "edit",
@@ -546,7 +570,7 @@ fn edit_forwards_metadata_flags_and_requires_a_change() {
 #[test]
 fn update_branch_forwards_default_and_rebase_modes_and_safely_reports_failure() {
     let fixture = Fixture::new();
-    let merge_update = fixture.run_pr(&["pr", "update-branch", "42"], "");
+    let merge_update = fixture.run_pr_json(&["pr", "update-branch", "42"], "");
     assert_eq!(
         success_json(&merge_update),
         json!({"number": 42, "rebase": false})
@@ -559,13 +583,13 @@ fn update_branch_forwards_default_and_rebase_modes_and_safely_reports_failure() 
     );
     assert_eq!(
         String::from_utf8(rebase_update.stdout).expect("UTF-8 text output"),
-        "pr #42 branch updated (rebase)\n"
+        "#42 branch updated (rebase)\n"
     );
     assert!(
         gh_lines(&fixture).contains(&"pr update-branch 42 --repo owner/repo --rebase".to_string())
     );
 
-    let failed = fixture.run_pr(
+    let failed = fixture.run_pr_json(
         &["pr", "update-branch", "42", "--rebase"],
         "pr-update-branch-failure",
     );
@@ -601,7 +625,7 @@ fn checkout_switches_to_the_pr_branch_without_force_and_reports_safe_failure() {
     assert!(run_git(&["add", "seed.txt"]).status.success());
     assert!(run_git(&["commit", "-qm", "initial"]).status.success());
 
-    let checked_out = fixture.run_pr(&["pr", "checkout", "42"], "pr-checkout-git");
+    let checked_out = fixture.run_pr_json(&["pr", "checkout", "42"], "pr-checkout-git");
     assert_eq!(success_json(&checked_out), json!({"number": 42}));
     assert_eq!(
         String::from_utf8(run_git(&["branch", "--show-current"]).stdout)
@@ -619,11 +643,11 @@ fn checkout_switches_to_the_pr_branch_without_force_and_reports_safe_failure() {
     let text = fixture.run_pr(&["pr", "checkout", "43", "--format", "text"], "");
     assert_eq!(
         String::from_utf8(text.stdout).expect("UTF-8 text output"),
-        "pr #43 checked out\n"
+        "#43 checked out\n"
     );
     assert!(gh_lines(&fixture).contains(&"pr checkout 43 --repo owner/repo".to_string()));
 
-    let failed = fixture.run_pr(&["pr", "checkout", "42"], "pr-checkout-failure");
+    let failed = fixture.run_pr_json(&["pr", "checkout", "42"], "pr-checkout-failure");
     assert_eq!(failed.status.code(), Some(1));
     assert!(failed.stdout.is_empty());
     assert_eq!(error_json(&failed)["code"], "github_cli");
@@ -677,7 +701,7 @@ exec "$shared" "$@"
 fn review_merge_ready_close_and_reopen_use_the_gh_commands() {
     let fixture = pr_lifecycle_fixture();
 
-    let approved = fixture.run_pr(
+    let approved = fixture.run_pr_json(
         &["pr", "review", "42", "--approve", "--body", "Looks good"],
         "",
     );
@@ -687,28 +711,25 @@ fn review_merge_ready_close_and_reopen_use_the_gh_commands() {
     );
     assert_eq!(gh_input(&fixture), "Looks good");
 
-    let changes = fixture.run_pr(&["pr", "review", "42", "--request-changes"], "");
+    let changes = fixture.run_pr_json(&["pr", "review", "42", "--request-changes"], "");
     assert_eq!(
         success_json(&changes),
         json!({"number": 42, "event": "request_changes"})
     );
 
-    let merged = fixture.run_pr(
-        &["pr", "merge", "42", "--method", "squash", "--auto"],
-        "",
-    );
+    let merged = fixture.run_pr_json(&["pr", "merge", "42", "--method", "squash", "--auto"], "");
     assert_eq!(
         success_json(&merged),
         json!({"number": 42, "method": "squash", "auto": true})
     );
 
-    let ready = fixture.run_pr(&["pr", "ready", "42"], "");
+    let ready = fixture.run_pr_json(&["pr", "ready", "42"], "");
     assert_eq!(success_json(&ready), json!({"number": 42, "draft": false}));
 
-    let draft = fixture.run_pr(&["pr", "ready", "42", "--undo"], "");
+    let draft = fixture.run_pr_json(&["pr", "ready", "42", "--undo"], "");
     assert_eq!(success_json(&draft), json!({"number": 42, "draft": true}));
 
-    let closed = fixture.run_pr(
+    let closed = fixture.run_pr_json(
         &[
             "pr",
             "edit",
@@ -726,7 +747,7 @@ fn review_merge_ready_close_and_reopen_use_the_gh_commands() {
     assert_eq!(closed["state"], "closed");
     assert_eq!(gh_input(&fixture), "bye");
 
-    let reopened = fixture.run_pr(
+    let reopened = fixture.run_pr_json(
         &["pr", "edit", "42", "--state", "open", "--comment", "back"],
         "",
     );
@@ -784,9 +805,9 @@ fn review_merge_ready_close_and_reopen_use_the_gh_commands() {
 
     // A transition comment and a branch deletion both require an explicit state.
     fs::remove_file(&fixture.log).expect("clear gh argument log");
-    let orphan_comment = fixture.run_pr(&["pr", "edit", "42", "--comment", "orphan"], "");
+    let orphan_comment = fixture.run_pr_json(&["pr", "edit", "42", "--comment", "orphan"], "");
     assert_eq!(error_json(&orphan_comment)["code"], "invalid_input");
-    let orphan_delete = fixture.run_pr(&["pr", "edit", "42", "--delete-branch"], "");
+    let orphan_delete = fixture.run_pr_json(&["pr", "edit", "42", "--delete-branch"], "");
     assert_eq!(error_json(&orphan_delete)["code"], "invalid_input");
     assert!(!fixture.log.exists());
 }
@@ -795,7 +816,7 @@ fn review_merge_ready_close_and_reopen_use_the_gh_commands() {
 #[test]
 fn merged_pull_request_state_edit_fails_before_any_write() {
     let fixture = Fixture::new();
-    let output = fixture.run_pr(
+    let output = fixture.run_pr_json(
         &["pr", "edit", "42", "--state", "open", "--comment", "reopen"],
         "pr-merged",
     );
@@ -831,34 +852,35 @@ fn merge_uses_configured_method_and_boolean_branch_default() {
     )
     .expect("write repository merge defaults");
 
-    let configured = fixture.run_pr(&["pr", "merge", "42"], "");
+    let configured = fixture.run_pr_json(&["pr", "merge", "42"], "");
     assert_eq!(
         success_json(&configured),
         json!({"number":42,"method":"squash","auto":false})
     );
     assert!(gh_lines(&fixture).contains(&"pr merge 42 --repo owner/repo --squash".to_string()));
-    assert!(!gh_lines(&fixture)
-        .iter()
-        .any(|line| line.contains("git/refs/heads")));
+    assert!(
+        !gh_lines(&fixture)
+            .iter()
+            .any(|line| line.contains("git/refs/heads"))
+    );
 
     fs::write(
         fixture.root.join(".workctl.json"),
         r#"{"defaults":{"github":{"pr":{"mergeMethod":"merge","deleteBranch":true}}}}"#,
     )
     .expect("update repository merge defaults");
-    let overridden = fixture.run_pr(&["pr", "merge", "42", "--method", "rebase"], "");
+    let overridden = fixture.run_pr_json(&["pr", "merge", "42", "--method", "rebase"], "");
     assert_eq!(
         success_json(&overridden),
         json!({"number":42,"method":"rebase","auto":false})
     );
-    assert!(
-        gh_lines(&fixture)
-            .contains(&"pr merge 42 --repo owner/repo --rebase".to_string())
-    );
+    assert!(gh_lines(&fixture).contains(&"pr merge 42 --repo owner/repo --rebase".to_string()));
     assert!(gh_lines(&fixture).contains(&REMOTE_BRANCH_DELETE.to_string()));
-    assert!(!gh_lines(&fixture)
-        .iter()
-        .any(|line| line.contains("--delete-branch")));
+    assert!(
+        !gh_lines(&fixture)
+            .iter()
+            .any(|line| line.contains("--delete-branch"))
+    );
 
     fs::write(
         fixture.root.join(".workctl.json"),
@@ -866,7 +888,7 @@ fn merge_uses_configured_method_and_boolean_branch_default() {
     )
     .expect("disable configured branch deletion");
     fs::remove_file(&fixture.log).expect("clear gh argument log");
-    let explicit_delete = fixture.run_pr(&["pr", "merge", "42", "--delete-branch"], "");
+    let explicit_delete = fixture.run_pr_json(&["pr", "merge", "42", "--delete-branch"], "");
     assert_eq!(
         success_json(&explicit_delete),
         json!({"number":42,"method":null,"auto":false})
@@ -895,7 +917,7 @@ fn rf_cfg_5_pr_create_applies_configured_labels_base_and_draft() {
     )
     .expect("write GitHub pull-request defaults");
 
-    let created = fixture.run_pr(
+    let created = fixture.run_pr_json(
         &[
             "pr", "create", "--title", "Defaults", "--label", "triage", "--label", "p1",
         ],
@@ -923,7 +945,7 @@ fn rf_cfg_5_pr_create_configured_assignees_and_reviewers_apply_until_overridden(
     )
     .expect("write GitHub pull-request defaults");
 
-    let configured = fixture.run_pr(&["pr", "create", "--title", "Configured"], "");
+    let configured = fixture.run_pr_json(&["pr", "create", "--title", "Configured"], "");
     assert_eq!(success_json(&configured)["number"], 42);
     assert!(
         gh_lines(&fixture).contains(
@@ -935,7 +957,7 @@ fn rf_cfg_5_pr_create_configured_assignees_and_reviewers_apply_until_overridden(
     );
 
     fs::remove_file(&fixture.log).expect("clear gh argument log");
-    let overridden = fixture.run_pr(
+    let overridden = fixture.run_pr_json(
         &[
             "pr",
             "create",
@@ -957,9 +979,11 @@ fn rf_cfg_5_pr_create_configured_assignees_and_reviewers_apply_until_overridden(
         ),
         "actual gh calls: {lines:?}"
     );
-    assert!(!lines
-        .iter()
-        .any(|line| line.contains("default-user") || line.contains("default-reviewer")));
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.contains("default-user") || line.contains("default-reviewer"))
+    );
 }
 
 // RF-CFG.5: an explicit `--base` wins over the configured base while the other configured keys
@@ -974,7 +998,7 @@ fn rf_cfg_5_pr_create_explicit_base_overrides_configured_base() {
     )
     .expect("write GitHub pull-request defaults");
 
-    let created = fixture.run_pr(
+    let created = fixture.run_pr_json(
         &["pr", "create", "--title", "Explicit", "--base", "main"],
         "",
     );
@@ -1001,7 +1025,7 @@ fn rf_cfg_5_pr_create_defaults_do_not_affect_pr_merge() {
     )
     .expect("write GitHub pull-request defaults");
 
-    let merged = fixture.run_pr(&["pr", "merge", "42"], "");
+    let merged = fixture.run_pr_json(&["pr", "merge", "42"], "");
     assert_eq!(
         success_json(&merged),
         json!({"number":42,"method":null,"auto":false})
@@ -1023,7 +1047,7 @@ fn rf_cfg_5_pr_create_defaults_do_not_affect_pr_merge() {
 fn delete_branch_removes_only_the_remote_ref() {
     let fixture = Fixture::new();
 
-    let merged = fixture.run_pr(
+    let merged = fixture.run_pr_json(
         &["pr", "merge", "42", "--method", "merge", "--delete-branch"],
         "",
     );
@@ -1040,45 +1064,46 @@ fn delete_branch_removes_only_the_remote_ref() {
     // A fork pull request has its head branch in another repository; this repository's branch of
     // the same name is not the one being deleted.
     fs::remove_file(&fixture.log).expect("clear gh argument log");
-    let fork = fixture.run_pr(
+    let fork = fixture.run_pr_json(
         &["pr", "edit", "42", "--state", "closed", "--delete-branch"],
         "pr-fork-head",
     );
     assert_eq!(success_json(&fork)["number"], 42);
-    assert!(!gh_lines(&fixture)
-        .iter()
-        .any(|line| line.contains("git/refs/heads")));
+    assert!(
+        !gh_lines(&fixture)
+            .iter()
+            .any(|line| line.contains("git/refs/heads"))
+    );
 
     // The head repository of a fork pull request may no longer exist.
     fs::remove_file(&fixture.log).expect("clear gh argument log");
-    let gone = fixture.run_pr(
+    let gone = fixture.run_pr_json(
         &["pr", "merge", "42", "--delete-branch"],
         "pr-head-repo-gone",
     );
     assert_eq!(success_json(&gone)["number"], 42);
-    assert!(!gh_lines(&fixture)
-        .iter()
-        .any(|line| line.contains("git/refs/heads")));
+    assert!(
+        !gh_lines(&fixture)
+            .iter()
+            .any(|line| line.contains("git/refs/heads"))
+    );
 
     // A branch that is already gone is the state deletion is trying to reach.
-    let missing = fixture.run_pr(
+    let missing = fixture.run_pr_json(
         &["pr", "merge", "42", "--delete-branch"],
         "branch-delete-missing",
     );
     assert_eq!(success_json(&missing)["number"], 42);
 
     // Any other deletion failure leaves the completed merge reported as partial progress.
-    let failed = fixture.run_pr(
+    let failed = fixture.run_pr_json(
         &["pr", "merge", "42", "--delete-branch"],
         "branch-delete-failure",
     );
     let error = error_json(&failed);
     assert_eq!(error["code"], "partial_success");
     assert_eq!(error["details"]["resource"]["number"], 42);
-    assert_eq!(
-        error["details"]["completed"],
-        json!(["pull request merge"])
-    );
+    assert_eq!(error["details"]["completed"], json!(["pull request merge"]));
     assert_eq!(
         error["details"]["pending"],
         json!(["remote branch deletion"])
@@ -1086,7 +1111,7 @@ fn delete_branch_removes_only_the_remote_ref() {
     assert!(!String::from_utf8_lossy(&failed.stderr).contains("private provider diagnostic"));
 
     // The same failure after a close reports the close and lists the skipped comment as pending.
-    let close_failed = fixture.run_pr(
+    let close_failed = fixture.run_pr_json(
         &[
             "pr",
             "edit",
@@ -1101,10 +1126,7 @@ fn delete_branch_removes_only_the_remote_ref() {
     );
     let error = error_json(&close_failed);
     assert_eq!(error["code"], "partial_success");
-    assert_eq!(
-        error["details"]["completed"],
-        json!(["pull request close"])
-    );
+    assert_eq!(error["details"]["completed"], json!(["pull request close"]));
     assert_eq!(
         error["details"]["pending"],
         json!([
@@ -1119,7 +1141,7 @@ fn delete_branch_removes_only_the_remote_ref() {
 #[test]
 fn delete_branch_with_auto_is_rejected() {
     let fixture = Fixture::new();
-    let output = fixture.run_pr(&["pr", "merge", "42", "--auto", "--delete-branch"], "");
+    let output = fixture.run_pr_json(&["pr", "merge", "42", "--auto", "--delete-branch"], "");
     assert_eq!(error_json(&output)["code"], "invalid_input");
     assert!(!fixture.log.exists());
 
@@ -1136,14 +1158,21 @@ fn delete_branch_with_auto_is_rejected() {
         r#"{"defaults":{"github":{"pr":{"deleteBranch":true}}}}"#,
     )
     .expect("write configured branch deletion default");
-    let queued = fixture.run_pr(&["pr", "merge", "42", "--auto"], "");
+    let queued = fixture.run_pr_json(&["pr", "merge", "42", "--auto"], "");
     assert_eq!(
         success_json(&queued),
         json!({"number":42,"method":null,"auto":true})
     );
-    assert!(!gh_lines(&fixture)
-        .iter()
-        .any(|line| line.contains("git/refs/heads")));
+    let queued_text = fixture.run_pr(&["pr", "merge", "42", "--auto"], "");
+    assert_eq!(
+        String::from_utf8(queued_text.stdout).expect("UTF-8 text output"),
+        "#42 merge queued\n"
+    );
+    assert!(
+        !gh_lines(&fixture)
+            .iter()
+            .any(|line| line.contains("git/refs/heads"))
+    );
 }
 
 #[test]
@@ -1158,7 +1187,7 @@ fn review_without_an_event_is_a_usage_error() {
 #[test]
 fn summary_only_review_uses_the_native_command() {
     let fixture = Fixture::new();
-    let approved = fixture.run_pr(
+    let approved = fixture.run_pr_json(
         &["pr", "review", "42", "--approve", "--body", "Looks good"],
         "",
     );
@@ -1180,7 +1209,7 @@ fn inline_review_posts_one_request_anchored_to_the_head() {
     let file = fixture.root.join("inline.txt");
     fs::write(&file, "from file").expect("write inline body file");
 
-    let reviewed = fixture.run_pr(
+    let reviewed = fixture.run_pr_json(
         &[
             "pr",
             "review",
@@ -1291,7 +1320,7 @@ fn inline_review_validation_fails_before_provider_access() {
             "-",
         ],
     ] {
-        let output = fixture.run_pr(&args, "");
+        let output = fixture.run_pr_json(&args, "");
         assert_eq!(error_json(&output)["code"], "invalid_input", "{args:?}");
     }
     assert!(!fixture.log.exists());
@@ -1304,7 +1333,7 @@ fn inline_review_sources_and_payload_are_bounded() {
     let oversized = fixture.root.join("oversized.txt");
     fs::write(&oversized, "x".repeat(1024 * 1024 + 1)).expect("write oversized body");
 
-    let output = fixture.run_pr(
+    let output = fixture.run_pr_json(
         &[
             "pr",
             "review",
@@ -1320,7 +1349,7 @@ fn inline_review_sources_and_payload_are_bounded() {
 
     let half = fixture.root.join("half.txt");
     fs::write(&half, "x".repeat(600 * 1024)).expect("write half-size body");
-    let output = fixture.run_pr(
+    let output = fixture.run_pr_json(
         &[
             "pr",
             "review",
@@ -1342,7 +1371,7 @@ fn inline_review_sources_and_payload_are_bounded() {
 #[test]
 fn inline_review_without_a_readable_head_never_writes() {
     let fixture = Fixture::new();
-    let output = fixture.run_pr(
+    let output = fixture.run_pr_json(
         &[
             "pr",
             "review",
@@ -1367,7 +1396,7 @@ fn inline_review_without_a_readable_head_never_writes() {
 fn interrupted_inline_review_reports_an_uncertain_write_without_retrying() {
     for mode in ["review-failure", "review-unconfirmed", "review-pending"] {
         let fixture = Fixture::new();
-        let output = fixture.run_pr(
+        let output = fixture.run_pr_json(
             &[
                 "pr",
                 "review",
@@ -1398,7 +1427,7 @@ fn interrupted_inline_review_reports_an_uncertain_write_without_retrying() {
 #[test]
 fn diff_prints_the_patch_as_json_or_raw_text() {
     let fixture = Fixture::new();
-    let as_json = fixture.run_pr(&["pr", "diff", "42"], "");
+    let as_json = fixture.run_pr_json(&["pr", "diff", "42"], "");
     let as_json = success_json(&as_json);
     assert_eq!(as_json["number"], 42);
     let patch = as_json["diff"].as_str().expect("diff string");
@@ -1420,7 +1449,7 @@ fn diff_prints_the_patch_as_json_or_raw_text() {
 #[test]
 fn pr_create_and_edit_resolve_the_current_milestone_only_when_requested() {
     let fixture = Fixture::new();
-    let created = fixture.run_pr(
+    let created = fixture.run_pr_json(
         &["pr", "create", "--title", "No milestone"],
         "milestone-nearest",
     );
@@ -1437,7 +1466,7 @@ fn pr_create_and_edit_resolve_the_current_milestone_only_when_requested() {
     );
 
     let current = Fixture::new();
-    let created = current.run_pr(
+    let created = current.run_pr_json(
         &[
             "pr",
             "create",
@@ -1456,7 +1485,7 @@ fn pr_create_and_edit_resolve_the_current_milestone_only_when_requested() {
     }));
 
     let updated = Fixture::new();
-    success_json(&updated.run_pr(
+    success_json(&updated.run_pr_json(
         &["pr", "edit", "42", "--milestone", "@current"],
         "milestone-nearest",
     ));
@@ -1465,7 +1494,7 @@ fn pr_create_and_edit_resolve_the_current_milestone_only_when_requested() {
     assert!(lines.contains(&"pr edit 42 --repo owner/repo --milestone Sooner".to_string()));
 
     let explicit = Fixture::new();
-    let created = explicit.run_pr(
+    let created = explicit.run_pr_json(
         &["pr", "create", "--title", "Explicit", "--milestone", "M1"],
         "milestone-tie",
     );
@@ -1477,7 +1506,7 @@ fn pr_create_and_edit_resolve_the_current_milestone_only_when_requested() {
     }));
 
     let missing = Fixture::new();
-    let output = missing.run_pr(
+    let output = missing.run_pr_json(
         &[
             "pr",
             "create",
@@ -1504,7 +1533,7 @@ fn whitespace_only_names_and_filters_fail_during_clap_parsing() {
         &["pr", "list", "--author", "   "][..],
         &["pr", "edit", "42", "--add-project", "   "][..],
     ] {
-        let output = fixture.run_pr(args, "");
+        let output = fixture.run_pr_json(args, "");
         assert_eq!(error_json(&output)["code"], "invalid_input");
     }
     assert!(!fixture.log.exists());
@@ -1514,19 +1543,19 @@ fn whitespace_only_names_and_filters_fail_during_clap_parsing() {
 fn pr_comment_lock_and_revert_use_native_gh_commands() {
     let fixture = Fixture::new();
 
-    let comment = fixture.run_pr(&["pr", "comment", "42", "--body", "Looks good"], "");
+    let comment = fixture.run_pr_json(&["pr", "comment", "42", "--body", "Looks good"], "");
     assert_eq!(success_json(&comment)["target"], "pr");
     assert_eq!(
         fs::read_to_string(&fixture.input).expect("read comment input"),
         "Looks good"
     );
 
-    let locked = fixture.run_pr(&["pr", "lock", "42", "--reason", "too_heated"], "");
+    let locked = fixture.run_pr_json(&["pr", "lock", "42", "--reason", "too_heated"], "");
     assert_eq!(success_json(&locked)["locked"], true);
-    let unlocked = fixture.run_pr(&["pr", "lock", "42", "--undo"], "");
+    let unlocked = fixture.run_pr_json(&["pr", "lock", "42", "--undo"], "");
     assert_eq!(success_json(&unlocked)["locked"], false);
 
-    let reverted = fixture.run_pr(
+    let reverted = fixture.run_pr_json(
         &[
             "pr",
             "revert",
@@ -1555,9 +1584,9 @@ fn pr_comment_lock_and_revert_use_native_gh_commands() {
         log.contains("pr revert 42 --repo owner/repo --title Revert feature --draft --body-file -")
     );
 
-    let invalid = fixture.run_pr(&["pr", "comment", "42"], "");
+    let invalid = fixture.run_pr_json(&["pr", "comment", "42"], "");
     assert_eq!(error_json(&invalid)["code"], "invalid_input");
-    let invalid_lock = fixture.run_pr(&["pr", "lock", "42", "--reason", "unknown"], "");
+    let invalid_lock = fixture.run_pr_json(&["pr", "lock", "42", "--reason", "unknown"], "");
     assert!(!invalid_lock.status.success());
 }
 
@@ -1574,13 +1603,13 @@ fn rf_cfg_8_configured_list_limit_applies_to_pull_request_listings() {
     .expect("write list limit config");
 
     assert_eq!(
-        success_json(&fixture.run_pr(&["pr", "list"], ""))
+        success_json(&fixture.run_pr_json(&["pr", "list"], ""))
             .as_array()
             .expect("pull request list")
             .len(),
         3
     );
-    success_json(&fixture.run_pr(&["pr", "list", "--limit", "3"], ""));
+    success_json(&fixture.run_pr_json(&["pr", "list", "--limit", "3"], ""));
 
     let log = fs::read_to_string(&fixture.log).expect("read gh arguments");
     assert!(log.contains("--limit 7 --json"), "{log}");

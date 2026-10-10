@@ -1,259 +1,146 @@
 # workctl
 
-`workctl` is a local CLI for code-host work items and pull requests. It manages GitHub issues and pull requests, and GitLab issues, by invoking the provider's own CLI, and each provider keeps its own command grammar. The `DecisionModel` package is provider-neutral so code-host providers can reuse the same model adapters. Issue label selection is opt-in through `@auto` in the existing label options.
+A local CLI for GitHub and GitLab work items. It wraps `gh` and `glab` in argument arrays, keeps each
+provider's own grammar, and never shells out. GitHub covers issues and pull requests; GitLab covers
+issues and merge requests. Remote paths never touch process arguments: bodies travel on stdin.
+
+Label and Project-field selection can call a decision model, opt-in only, through `@auto`.
 
 ## Requirements
 
-- Stable Rust toolchain and Cargo
-- `git` for repository and remote discovery
-- GitHub CLI (`gh`) installed and authenticated for GitHub operations; `gh` 2.99.0 or newer for attachments
-- GitLab CLI (`glab`) installed and authenticated for GitLab operations
-- Hosted decision adapters use `decisionModel.apiKey` (local config only) or `DECISION_MODEL_API_KEY`; local adapters do not require hosted credentials
+- Rust toolchain and Cargo
+- `git` for repository discovery
+- `gh` (2.99.0+ for attachments) and/or `glab`, already authenticated
+- `--help` and `--version` need none of the above
 
-Help and version do not require `git` or a provider CLI.
-
-## Build and verify
+## Install
 
 ```sh
-cargo build --release
-cargo test
-./target/release/workctl --help
+cargo install --git https://github.com/0spura/workctl --locked
+workctl --version
 ```
 
-## Commands
+Cargo puts the binary in `$CARGO_HOME/bin`; keep it on `PATH`. From a clone: `cargo build --release`
+then `cargo test` and `./target/release/workctl --help`.
+
+## Issues
 
 ```sh
-workctl issue create --title "Fix the parser" --body "Details"
-workctl issue create --title "Crash on save" --body-file report.md
-workctl issue list --state open --limit 30
-workctl issue list --label bug --label p1 --assignee me --search "in:title fix"
-workctl issue view 123
-workctl issue blockers 30
-workctl issue edit 123 --state closed --comment "Fixed in 1.4.3" --reason completed
-workctl issue edit 123 --state closed --duplicate-of 118
-workctl issue edit 123 --state open --comment "Still reproducible"
-workctl issue comment 123 --body "Reproduced on 1.4.2"
+workctl issue create --title "Fix the parser" --body-file report.md --label bug --milestone "1.4"
+workctl issue list --state open --limit 30            # open|closed|all, limit 1-1000, default 30
+workctl issue view 123                               # body, type, parent, sub-issues
+workctl issue blockers 30                            # "#18 -> #29 -> #30", bounded traversal
+workctl issue edit 123 --append-body "Reproduced on 1.4.2."
+workctl issue edit 123 --replace-section "## Acceptance" --section-body-file new.md
+workctl issue edit 123 --patch-file body.patch --expect-updated-at 2026-01-02T00:00:00Z
+workctl issue edit 123 --state closed --reason completed --comment "Fixed in 1.4.3"
+workctl issue edit 123 --parent 100 --add-sub-issue 124,125 --add-blocked-by 200
+workctl issue edit 123 --project-field "Priority=High" --clear-project-field "Start date"
 workctl issue comment 123 --body-file - < notes.md
 workctl issue lock 123 --reason resolved
-workctl issue lock 123 --undo
 workctl issue develop 123 --name fix/parser-crash --checkout
-workctl issue develop 123 --list
-workctl issue create --title "Crash on save" --body-file report.md --label @auto
-workctl issue create --title "Plan the migration" --project-field "Priority=High" --project-field "Start date=2026-10-07"
-workctl issue edit 123 --title "Updated title" --add-label @auto
-workctl issue edit 123 --title "Updated title" --add-label bug --add-label @auto
-workctl issue edit 123 --append-body "Reproduced on 1.4.2."
-workctl issue edit 123 --replace-section "## Acceptance" --section-body "New criteria"
-workctl issue edit 123 --patch-file body.patch
-workctl issue edit 123 --title "Updated title" --expect-updated-at 2026-01-02T00:00:00Z
-workctl issue edit 123 --project-field "Priority=High" --clear-project-field "Start date"
-workctl issue edit 123 --remove-milestone --type Bug
-workctl issue edit 123 --parent 100 --add-sub-issue 124,125
-workctl issue edit 123 --add-blocked-by 200 --add-blocking 300
-workctl issue edit 123 --remove-parent --remove-blocked-by 200
-workctl issue edit 123 124 -t "Updated title" -R owner/repo
-workctl issue edit https://github.com/owner/repo/issues/123 -b "Updated body"
-```
-`--project-field` resolves against one configured GitHub Project profile. The schema and option values are discovered dynamically; supported types are text, number, date, single-select, and iteration. Issue creation uses the profile only when the repository is explicitly allowlisted. Explicit `--project` can be paired with fields only when its title matches that profile. The agent still makes one `workctl issue create` call; workctl handles schema lookup, issue creation, Project membership, and field updates internally. If a post-create step fails, a provider-neutral partial-success error identifies the resource and completed/pending operations; workctl does not retry creation.
-
-Issue editing accepts `--project-field NAME=VALUE` and `--clear-project-field NAME` for the same repository-allowlisted profile. It validates all requested fields before writes, never reapplies creation defaults or `autoSelectFields`, and does not automatically add Project membership. Set/clear overlaps and Project removal combined with field changes are rejected. Field-only edits skip `gh issue edit`; combined edits write the issue first, then the fields serially. A failure after any successful write returns `partial_success` with completed/pending operations and no automatic retry. `--expect-updated-at` guards the issue revision, not concurrent changes to Project fields.
-
-Issue edits can explicitly select a Project option with `--project-field 'Priority=@auto'`. Only named single-select or iteration fields participate; creation defaults and `autoSelectFields` do not trigger selection during edit. The configured model sees the final proposed title/body and discovered options, together with any `--add-label @auto` candidates in one request per issue. A unique best score of at least 0.8 writes that option; lower scores or tied best options leave the current field untouched. Model failures stop before writes, and the issue revision is rechecked after classification. Project field values themselves have no revision guard.
-
-GitHub editing follows native `gh` names: `--remove-milestone` replaces `--clear-milestone` without an alias; `--type`/`--remove-type`, parent/sub-issue flags, and blocked-by/blocking flags mutate the corresponding relationships. Relationship values accept issue numbers or canonical GitHub issue URLs; list flags accept repeats or comma-separated values. `--add-blocked-by 200` means issue 200 blocks the edited issue; `--add-blocking 300` means the edited issue blocks issue 300. `--parent` replaces the parent, and `--remove-parent` removes it.
-
-Use native `-t`, `-b`, `-F`, `-m`, and `-R` shortcuts. Multiple edit targets must belong to one repository and are processed serially; success returns an array of full records instead of the single-target object. A later failure reports completed/pending target URLs as `partial_success` and stops without retrying. A successful mutation followed by failed confirmation also reports partial success; inspect GitHub before resuming. Numeric relationship references belong to the selected repository; explicit relationship URLs can name another repository.
-
-Output is compact JSON by default. Add `--format text` for human-readable output; terminal control characters in provider data are escaped, while body newlines and tabs remain readable. Errors are JSON on stderr with a nonzero exit code. `issue list` returns summaries without bodies; `view`, `create`, and `edit` return full issue data. There is no delete command in this release.
-
-GitHub `issue view NUMBER` additionally returns `issue_type` (string or null), `parent` (issue reference or null), and a `sub_issues` array. Each reference has `number`, `title`, `state`, and `url`. Sub-issues are paginated in pages of 100, up to 1,000 relationships and ten pages; unavailable, malformed, or incomplete hierarchy data fails the view. Blocker relationships are neither queried nor printed by `issue view`; use `issue blockers` to inspect them. Native dependency editing and create/edit/list and GitLab outputs remain unchanged.
-`workctl issue blockers NUMBER` is the context-light alternative: it returns only complete chains of open blockers, such as `#18 -> #29 -> #30`; with no open blocker chain it prints nothing in text mode and `[]` in JSON. It omits titles, bodies, and closed issues. Cross-repository references include `OWNER/REPO#NUMBER`. It does not claim that the issue is ready when the output is empty. Traversal is bounded to 20 issue reads, 500 edges, 20 paths, and 20 issues per path. If a bound prevents a complete result, the command fails rather than presenting a partial chain as complete.
-
-Issue state changes use `issue edit NUMBER --state open|closed`; ordinary edits may be combined with the transition. `--comment` adds an authored transition comment after the state change, while `--reason` (`completed`, `not planned`, or `duplicate`) and `--duplicate-of` apply only to closing. Lock reasons are `off_topic`, `resolved`, `spam`, and `too_heated`; `issue lock --undo` unlocks. Transition comments and comment bodies travel on stdin rather than process arguments. Combined writes are sequential and not rolled back or retried; inspect GitHub before retrying after a partial failure. `edit` returns the full issue record; `comment` returns `{"number", "target": "issue"}`; `lock` returns `{"number", "target": "issue", "locked"}`. `issue develop NUMBER` creates the branch GitHub links to the issue and returns `{number,branch}`; `--list` reports `{number,branches}` for the branches already linked and performs no write. The branch is created on the remote and workctl never creates a local branch itself, so only `--checkout` changes the current worktree. `--base` and `--name` shape the created branch and conflict with `--list`.
-
-Global options apply before or after the group subcommand:
-
-```sh
-workctl --repo owner/repo issue list
-workctl issue list --provider github --format text
 ```
 
-The default list state is `open`; accepted states are `open`, `closed`, and `all`. The limit defaults to 30 and accepts values from 1 through 1000. Create and edit do not prompt interactively. An explicit empty edit body clears the issue body.
-
-Issue and pull-request metadata flags are optional. Use the repository's existing labels, milestone, assignees, and project conventions. `--milestone @current` selects the open milestone with the nearest due date today or later; overdue and undated milestones are ignored, and creation fails safely before the write when no milestone qualifies or the nearest dates tie. Omitting `--milestone` sends no milestone flag and performs no lookup, so nothing is assigned implicitly. `--assignee`, `--label`, `--milestone @current`, title, and body can all be given in one create command, which covers self-assignment with `--assignee @me`.
-
-The optional semantic declaration for issue creation is **proposed, not implemented**. It would be
-stored privately and kept separate from GitHub-native labels, milestones, assignees and projects. The
-input channel, local store and reconciliation flow are not yet selected. Existing metadata flags do not
-provide this feature; see the [SRS proposal](docs/srs.md#proposed-extension-rf-wi5-private-semantic-declaration-on-issue-create)
-and [architecture](docs/architecture.md#proposed-private-semantic-declarations).
-
-`issue create --label @auto` and `issue edit NUMBER --add-label @auto` use the selected `DecisionModel` adapter and add qualifying labels alongside manual labels. `@auto` is reserved and cannot be used with `--remove-label`. Configure `defaults.github.issue.labelCandidates` to pass only an allowlisted subset of existing repository labels to the model; without it, all repository labels remain candidates. For GitHub issue creation, `defaults.github.issue.project.autoSelectFields` opts specific Project fields into automatic option selection; only single-select and iteration fields are eligible. The configured Project profile is the allowlist, and it receives only dynamically discovered options for those fields. Selection happens in the same model request as `@auto` labels when both are requested. Existing configured or explicit `--project-field` values win; scores below 0.8 leave fields unset. A tied best score or model/configuration failure stops before issue creation.
-
-Select the model with `decisionModel.model` in project configuration or the `DECISION_MODEL` override: `jev-latest`, `laya`, `fastino/GLiDE`, or `local/<model-id>`. Jev, Laya, and GLiDE use their native hosted decision APIs and require a key from `decisionModel.apiKey` in `.workctl.local.json` or the `DECISION_MODEL_API_KEY` override. `local/<model-id>` uses any local server implementing OpenAI-compatible Chat Completions at `decisionModel.baseUrl` or the `DECISION_MODEL_BASE_URL` override (default `http://127.0.0.1:11434/v1`); it is not a hosted OpenAI integration and requires no hosted key. Local endpoints must remain on loopback. The model is selected only for an `@auto` operation, so a command without the marker never consults a configured key.
-
-Native decision models return model-native probabilities/confidence. Generic LLM scores are generated estimates; JSON output mode does not make them calibrated probabilities. All adapters use the existing `>= 0.8` cutoff, but scores are not assumed comparable across models.
-
-
-## GitLab issues
-
-GitLab resolves to a different grammar whose verbs and flags mirror `glab`, so GitHub spellings such as `--state` and `--limit` are usage errors rather than silently accepted. The resolved provider decides which grammar exists; `--help` shows the active one.
-
-```sh
-workctl issue create --title "Unexpected crash" --description-file description.md \
-  --label bug --assignee alice --milestone "1.0" --weight 2 --due-date 2026-11-30
-workctl issue update 12 --title "Crash on startup" --label triage --unlabel needs-info
-workctl issue update 12 --assignee=+alice --assignee=-bob --milestone "" --public
-workctl issue list --all
-workctl issue list --closed --label bug
-workctl issue list --assignee @me --search crash --per-page 50
-workctl issue view 12
-```
-
-- `issue create` requires `--title` and either `--description TEXT` or `--description-file FILE`; `--description-file -` reads stdin. Description bytes are sent to `glab` on stdin, not exposed in process arguments; a description consisting only of `-` is rejected because `glab` reserves it for editor behavior. Supported metadata: repeatable `--label` and plain `--assignee`, `--milestone`, `--confidential`, `--weight` (including zero), and `--due-date YYYY-MM-DD`. `glab issue create` omits weight zero, so workctl sets it with a follow-up `glab issue update`.
-- `issue update NUMBER` accepts any nonempty combination of `--title`, `--description`/`--description-file`, `--label`, `--unlabel`, `--assignee`, `--unassign`, `--milestone`, `--confidential`/`--public`, `--weight`, and `--due-date`. Empty description replacement is rejected. Assignee `+`/`-` prefixes add/remove usernames; milestone empty string or `0` clears it.
-- `issue list` filters: `--closed` (closed only), `--all` (every state; mutually exclusive with `--closed`), `--label NAME` (repeatable), `--assignee USERNAME|@me`, `--author USERNAME|@me`, `--milestone VALUE`, `--search TEXT`, and `--per-page N` (1 through 100, default 30). The default state is open.
-- `issue view NUMBER` takes the GitLab IID.
-- Output retains the shared issue shapes: `issue list` returns summaries without bodies, and `issue view`, `issue create`, and `issue update` return `{"number", "title", "body", "state", "url", "created_at", "updated_at"}` with the GitLab `iid` mapped to `number`, `description` to `body`, and `opened` state to `open`. GitHub's view-only relationship fields and GitLab-only fields such as `confidential`, `weight`, and `due_date` are not part of the shared record.
-- If the write succeeds but its result cannot be confirmed, `gitlab_write_uncertain` asks you to check the issue before retrying. GitLab `mr` is not implemented yet. Typing `pr` fails with an error naming `mr`, GitLab's merge-request group.
-
-## Editing without rewriting the body
-
-An `issue edit` — or a `pr edit` — never requires the whole new body. Pick at most one body change per invocation:
-
-| Flag | Effect |
-| --- | --- |
-| `--body TEXT` / `--body-file FILE` | Replaces the body (`-` reads stdin) |
-| `--append-body TEXT` / `--append-body-file FILE` | Appends a new block, keeping one separating newline |
-| `--replace-section HEADING --section-body TEXT` / `--section-body-file FILE` | Replaces the content of one ATX section (`## Heading`), leaving other sections alone |
-| `--patch-file FILE` | Applies a unified diff to the current body (`-` reads stdin) |
-
-The same table and the same resolver back `pr edit`: it fetches the pull request once, applies the change to that text, and sends one write. `issue edit` and `pr edit` differ only in the metadata flags they accept.
-
-`--patch-file` takes standard `git diff` output. Hunks are located by exact context match, not by line number, so a patch applies to the right place or fails with `patch_conflict`; there is no fuzzy matching and no write on failure. Generate the diff against the body `workctl issue view` or `workctl pr view` just returned, and use `--expect-updated-at` with that item's `updated_at` to refuse the write if someone edited it in between.
-
-Attachments are optional on issue create/edit and pull-request create/edit. `--attach FILE[#ALT]` may be repeated; GitHub CLI 2.99.0 or newer is required. `gh` validates and uploads the media; `workctl` never calls private upload endpoints.
-
-This reference is duplicated by `workctl issue --help` and `workctl issue edit --help`, which are generated from the same definitions that parse the flags. For an agent, `--help` is the cheaper and safer source: it is read only when needed and cannot drift from the binary.
+- `--label @auto` and `--project-field 'Priority=@auto'` pick from model scores; one request per
+  operation, scores below the threshold keep the current value, and the revision is rechecked after.
+- Project fields resolve against one configured, repository-allowlisted Project profile; validation
+  runs before any write.
+- Body changes are one of `--body`, `--append-body`, `--replace-section`, `--patch-file` — never the
+  whole body rewrite. The same table backs `pr edit`.
+- `--patch-file` matches hunks by exact context and fails with `patch_conflict` without writing.
 
 ## Pull requests
 
 ```sh
-workctl pr create --title "Add pull request support" --body "Implements #12" --base main --closes 12
-workctl pr create --title "WIP: parser" --body "Draft" --draft --head feature-x
-workctl pr list --state open --limit 30
-workctl pr list --state merged --author me --label bug --draft --search "in:title workctl"
+workctl pr create --title "Add PR support" --body "Implements #12" --base main --closes 12
+workctl pr list --state merged --author me --label bug --search "in:title workctl"
 workctl pr view 42
-workctl pr checkout 42
-workctl pr status 42
-workctl pr update-branch 42
-workctl pr update-branch 42 --rebase
-workctl pr diff 42
+workctl pr status 42                                  # state, draft, branches, mergeability, checks
 workctl pr diff 42 --name-only
-workctl pr checks 42
-workctl pr checks 42 --required
 workctl pr checks 42 --required --watch --interval 5 --fail-fast
 workctl pr review 42 --approve --body "Looks good"
-workctl pr review 42 --request-changes --body-file review.md
-workctl pr review 42 --comment
-workctl pr merge 42 --method squash --delete-branch
-workctl pr merge 42 --auto --method squash
-workctl pr edit 42 --title "Updated title"
-workctl pr edit 42 --append-body "Reproduced on 1.4.2."
-workctl pr edit 42 --replace-section "## Acceptance" --section-body "New criteria"
-workctl pr edit 42 --patch-file body.patch
-workctl pr edit 42 --add-label bug --remove-label stale --add-reviewer hubot --remove-reviewer octocat
-workctl pr edit 42 --closes 123 --closes other/repo#7 --remove-closes 118
-workctl pr edit 42 --title "Updated title" --expect-updated-at 2026-01-02T00:00:00Z
+workctl pr update-branch 42 --rebase
+workctl pr merge 42 --method squash --delete-branch   # --auto only queues
 workctl pr ready 42
-workctl pr ready 42 --undo
 workctl pr edit 42 --state closed --comment "Superseded by #43" --delete-branch
-workctl pr edit 42 --state open --comment "Reopening"
-workctl pr comment 42 --body "Looks good to me"
-workctl pr lock 42 --reason resolved
-workctl pr lock 42 --undo
-workctl pr revert 42 --title "Revert parser rewrite" --body "Caused the 1.4.2 regression" --draft
+workctl pr revert 42 --title "Revert parser rewrite"
 ```
 
-Creation accepts optional `--assignee`, `--label`, `--reviewer` (pull requests), `--milestone`, and `--project` flags; `--milestone @current` selects the open milestone with the nearest upcoming due date, ignoring overdue and undated ones, and fails before the write when none qualifies or the nearest dates tie. Omitting `--milestone` sends no milestone flag and performs no lookup. Issue edits and `pr edit` accept optional add/remove assignee, label, and project flags; both can set a milestone by name or with `@current`, or clear it, without applying a creation default. Attachments use `--attach FILE[#ALT]`; if create fails during attachment upload, check GitHub before retrying because the item may already exist.
+- `--milestone @current` picks the nearest open milestone due today or later; a tie or none fails
+  before the write. Omitting the flag sends nothing, so nothing is assigned implicitly.
+- `pr edit` adds `--base`, `--closes`/`--remove-closes`, assignee/label/reviewer add and remove, and
+  `--milestone`; closing references are managed inside the body in one write.
+- `pr merge --delete-branch` deletes the remote head branch through its own `gh api` call, never a
+  local branch, never a fork's same-named branch.
+- `pr checks --watch` uses `gh`'s native watch; `--interval`, `--fail-fast`, `--watch-timeout` are
+  watch-only. `pr checkout` delegates to `gh pr checkout` and never passes `--force`.
 
-`pr list` returns summaries without bodies; `view`, `create`, and `edit` return full pull request data. List states are `open`, `closed`, `merged`, and `all`, and the default is `open`. `pr diff` prints the patch and `--name-only` limits it to changed file names. `pr checks` returns check runs and reports `[]` when none are reported. `pr status` combines concise PR state, draft, branch, mergeability, review decision, and required checks without fetching the body. An empty required-check report or unknown review/mergeability value is inconclusive; status does not declare the PR ready to merge. Its view/check reads are sequential, not an atomic snapshot. `pr update-branch` merges the latest base branch into the PR branch by default; `--rebase` rebases it instead. It updates GitHub only and does not check out or change a local branch. `pr review` requires exactly one of `--approve`, `--request-changes`, or `--comment`, and only a top-level review is submitted.
-`pr checks --watch` waits using GitHub CLI's native watch mode rather than polling in workctl. `--interval` (1–300 seconds) and `--fail-fast` are watch-only; `--watch-timeout` is also watch-only and sets an absolute process deadline from 1 to 3600 seconds (default 600). Check failures are returned as check data; a timeout returns a safe error with no partial report. Normal `pr checks` keeps its existing behavior and timeout.
-`pr checkout NUMBER` delegates to `gh pr checkout NUMBER` in the current worktree. GitHub CLI retains its normal protection for local changes; workctl never passes `--force` and does not expose branch override, detached-HEAD, or separate-worktree options. Success reports `{"number": NUMBER}` in JSON or `pr #NUMBER checked out` in text; this changes the current local branch.
+## GitLab
 
-`pr merge` accepts `--method merge|squash|rebase`, `--delete-branch`, and `--auto`. Method precedence is explicit `--method`, then `defaults.github.pr.mergeMethod`, then GitHub CLI inference. `defaults.github.pr.deleteBranch` is a boolean (default `false`); when true, it deletes the remote branch after every completed merge, while `--delete-branch` enables it for one merge when the setting is false. There is no per-command inverse flag. Deletion removes the remote head branch only: workctl reads the pull request's head ref and issues its own `gh api --method DELETE repos/OWNER/REPO/git/refs/heads/BRANCH` call, never passing `--delete-branch` to `gh`, so no local branch is deleted and a pull request opened from a fork never deletes a same-named branch here. A ref that is already gone is not an error. A queued merge has not happened yet, so `--delete-branch` with `--auto` fails as `invalid_input` and a configured default is not attempted for `--auto`. Without a configured or explicit method, `gh` chooses as before. `pr edit` reuses the body-change table above and adds `--base`, `--add-label`/`--remove-label`, `--add-reviewer`/`--remove-reviewer`, `--add-assignee`/`--remove-assignee`, `--closes`/`--remove-closes`, and `--milestone`. `--closes` and `--remove-closes` accept `NUMBER` or `OWNER/REPO#NUMBER` and manage closing references as body text in the same single write: a missing reference is appended as one `Closes <reference>` line, and a removal drops a line that holds one closing keyword and that reference. An addition already present or a removal that matches nothing leaves the body alone and sends no write on its own. `pr ready` marks the pull request ready for review, and `--undo` converts it back to a draft.
-Output shape: `create`, `view`, and `edit` return full pull-request records; `status` returns `{number,title,state,draft,url,base_ref,head_ref,mergeable,review_decision,required_checks}`; `list` returns summaries; `checkout` returns `{number}`; `diff` returns `{number,diff}`; `checks` returns check runs; `review` returns `{number,event}`; `merge` returns `{number,method,auto}`; `update-branch` returns `{number,rebase}`; `ready` returns `{number,draft}`; `comment` returns `{number,target:"pr"}`; `lock` returns `{number,target:"pr",locked}`; `revert` returns the new PR number.
+GitLab mirrors `glab`, so GitHub spellings like `--state` are usage errors. `--help` shows the active
+grammar; provider is resolved before parsing. These examples assume a GitLab repository or
+`--work-item-provider gitlab`.
 
-`pr edit NUMBER --state open|closed` changes lifecycle state after ordinary edits; `--comment` posts a transition comment, and `--delete-branch` is valid only when closing, where it removes the remote head branch after the close and before the transition comment, leaving any local branch in place. Merged PRs cannot change state. `pr lock --undo` unlocks. These writes are sequential, not rolled back or retried; inspect GitHub after a partial failure. Standalone `pr comment` and transition comments travel on stdin. `pr review --inline PATH:LINE[:left|right] TEXT` adds a single-line diff comment; repeated `--inline` and `--inline-file` options are submitted in one review anchored to the observed head SHA. Inline COMMENT and REQUEST_CHANGES reviews require an authored summary. If GitHub's response does not confirm submission, the result is uncertain; workctl does not retry.
-`pr comment NUMBER` adds a top-level comment. Its body comes from exactly one of `--body` or `--body-file` (`-` reads stdin) and travels on stdin, never in process arguments. `pr revert NUMBER` opens a new pull request that reverts the merge; `--title`, `--body`/`--body-file`, and `--draft` are forwarded only when supplied. A revert write is never retried automatically; if its result is unreadable, check GitHub before retrying.
+```sh
+workctl issue create --title "Unexpected crash" --description-file description.md --weight 2
+workctl issue update 12 --title "Crash on startup" --assignee=+alice --assignee=-bob
+workctl issue list --closed --label bug --per-page 50
+workctl issue view 12
+workctl mr list && workctl mr view 7
+```
 
-## Repository context
+`iid` maps to `number`, `description` to `body`, `opened` to `open`. Descriptions go to `glab` on
+stdin. Merge requests live under `mr`, not `pr`. If a write cannot be confirmed,
+`gitlab_write_uncertain` asks you to check the issue before retrying.
 
-Inside a Git worktree, `workctl` resolves the repository from the `origin` remote and infers the provider from its host: `github.com` selects GitHub and `gitlab.com` selects GitLab. Outside a Git worktree, pass both `--provider` and `--repo`. An unknown host does not fall back, and an `origin` remote belonging to a provider other than the selected one fails closed.
+## Output
 
-Provider precedence is `--provider`, project configuration, then the Git remote host, defaulting to GitHub when nothing resolves. Repository precedence is `--repo`, then the `origin` remote. The provider is selected before argument parsing, so only the resolved provider's grammar exists for a given invocation.
+Compact text by default: writes report `#123 created`, `#123 updated`, `!5 closed`, `unchanged`
+for a no-op, and `merge queued` for `--auto`. Lists carry identity, title, and state; views, diffs,
+notes, and discussions keep the requested content. Terminal controls are escaped; authored newlines
+and tabs stay readable.
 
-`--repo` accepts `OWNER/REPO` for GitHub, `GROUP[/SUBGROUP...]/PROJECT` for GitLab, and an optional leading `HOST/` that must match the resolved provider's host.
+`--format json` or `defaults.output.format: "json"` selects the unchanged structured schemas, with the
+explicit flag winning. Errors print `code: message` on stderr, or JSON when selected, and always exit
+nonzero with an empty stdout. Partial failures keep resource identity plus completed/pending
+operations; no retry, no rollback.
 
-Optional strict JSON configuration files are discovered at the Git root and validated on every command, even when CLI flags override provider/repository values:
+## Repository and configuration
 
-- `.workctl.json` can be committed for project-wide defaults.
-- `.workctl.local.json` overrides fields locally and is gitignored.
+Inside a worktree the repository comes from `origin` and the provider from its host; outside, pass
+`--provider` and `--repo`. Unknown hosts fail closed. Precedence: `--repo`, then `origin`.
 
-Both files must be regular, non-symlink files no larger than 64 KiB. Supported fields include `provider` and `workItemProvider` (`github` or `gitlab`), GitHub issue defaults under `defaults.github.issue` (`assignees`, `labels`, `labelCandidates`, and an optional Project profile with `url`, exact `repositories`, `fields`, and `autoSelectFields`), GitHub pull-request defaults under `defaults.github.pr` (`mergeMethod`: `merge|squash|rebase`; `deleteBranch`: boolean, default `false`; plus `labels`, `assignees`, `reviewers`, `base`, and boolean `draft` for `pr create`), GitLab create defaults under `defaults.gitlab.issue` (`labels`, `assignees`) and `defaults.gitlab.mr` (`labels`, `assignees`, `reviewers`, `targetBranch`, boolean `draft`), the success format under `defaults.output.format` (`json` or `text`), the listing limit under `defaults.github.listLimit` (1–1000), and the decision model under `decisionModel.model` (`jev-latest`, `laya`, `fastino/GLiDE`, or `local/<model-id>`) with `decisionModel.baseUrl` for the loopback local endpoint.
-
-Configured defaults never override an explicit flag. Configured labels precede explicit labels with duplicates removed, explicit `--assignee`/`--reviewer` replace configured lists, explicit `--base`/`--target-branch` and `--format` win, and `--limit` wins over `defaults.github.listLimit`, which falls back to 30. PR merge method precedence is explicit CLI option, configured default, then `gh` inference. The branch-deletion setting applies to every completed PR merge when true and deletes the remote branch only; the per-command `--delete-branch` option can enable deletion but cannot override a true config value, and neither applies to an `--auto` merge. Local top-level values override shared values; a local `defaults` object replaces the shared defaults object as a whole, while `decisionModel` keys merge independently. `decisionModel.apiKey` is accepted only in `.workctl.local.json` — a shared-file key fails closed without echoing it — and nonblank `DECISION_MODEL`, `DECISION_MODEL_API_KEY`, and `DECISION_MODEL_BASE_URL` variables override the matching configured value. Unknown fields and malformed JSON fail closed. Legacy `.mcp-tracker*.json` configuration is not read or migrated.
-
-
-Example:
+`.workctl.json` (committable) and `.workctl.local.json` (gitignored, wins) are read at the Git root,
+64 KiB max, non-symlink. Keys: `provider`/`workItemProvider`, `defaults.github.issue`
+(`assignees`, `labels`, `labelCandidates`, `project`), `defaults.github.pr` (`mergeMethod`,
+`deleteBranch`, `labels`, `assignees`, `reviewers`, `base`, `draft`), `defaults.gitlab.issue|mr`,
+`defaults.output.format`, `defaults.github.listLimit`, and `decisionModel` (`model`,
+`baseUrl`, local-only `apiKey`). Model choices: `jev-latest`, `laya`, `fastino/GLiDE`,
+`local/<model-id>` (loopback OpenAI-compatible endpoint; no hosted key). An explicit flag always
+beats configuration; unknown fields fail closed.
 
 ```json
 {
   "workItemProvider": "github",
-  "decisionModel": {
-    "model": "local/qwen3-4b",
-    "baseUrl": "http://127.0.0.1:11434/v1"
-  },
+  "decisionModel": { "model": "local/qwen3-4b", "baseUrl": "http://127.0.0.1:11434/v1" },
   "defaults": {
     "github": {
-      "issue": {
-        "assignees": ["@me"],
-        "labels": ["triaged"],
-        "labelCandidates": ["bug", "documentation"],
-        "project": {
-          "url": "https://github.com/orgs/acme/projects/7",
-          "repositories": ["acme/service"],
-          "autoSelectFields": ["Priority"],
-          "fields": {
-            "Status": "Todo"
-          }
-        }
-      },
-      "pr": {
-        "mergeMethod": "squash",
-        "deleteBranch": false,
-        "labels": ["triaged"],
-        "base": "main"
-      },
+      "issue": { "assignees": ["@me"], "labels": ["triaged"], "labelCandidates": ["bug"] },
+      "pr": { "mergeMethod": "squash", "deleteBranch": false, "base": "main" },
       "listLimit": 50
     },
-    "gitlab": {
-      "mr": {
-        "labels": ["backend"],
-        "reviewers": ["@me"],
-        "targetBranch": "main",
-        "draft": true
-      }
-    },
-    "output": {
-      "format": "text"
-    }
+    "output": { "format": "text" }
   }
 }
 ```
 
 ## Safety and scope
 
-GitHub operations use `gh` argument arrays and GitLab operations use `glab` argument arrays; create/edit bodies travel on stdin. Attachments use documented `gh --attach` support; no private upload endpoints are called. DecisionModel runs for `@auto` labels or when an allowlisted Project field needs automatic selection. It receives only work-item title/description and configured candidates (repository labels and dynamically discovered Project options), never credentials or unrelated metadata. Hosted adapters use their native authentication headers and fixed HTTPS endpoints, and a decision-model API key is accepted only in the gitignored `.workctl.local.json`; it never appears in output, errors, or logs. Local model URLs are restricted to loopback; errors do not expose credentials, raw provider diagnostics, stack traces, or internal paths. No shell or automatic `gh`/`glab` download is used.
+No shell, no automatic CLI downloads, no private upload endpoints: attachments use documented
+`gh --attach`. The decision model only ever sees title/description plus configured candidates, and a
+`decisionModel.apiKey` is accepted only in the gitignored local file, never printed. Local model URLs
+must be loopback. Errors never expose credentials, raw provider diagnostics, stack traces, or
+internal paths.
 
-The decision-model package is independent of code-host provider implementation. Its native adapters and generic local LLM adapter share one validated input/output contract; any code-host provider can call the same package. The current CLI implements GitHub issues and pull requests plus GitLab issue reads. See [requirements](docs/srs.md), [architecture](docs/architecture.md), [ADR-0015](docs/adr/0015-provider-neutral-decision-model-package.md), [ADR-0020](docs/adr/0020-remove-gliner-python-server.md), [ADR-0039](docs/adr/0039-decision-model-configuration.md), and prior [ADRs](docs/architecture.md#module-map).
+Details: [requirements](docs/srs.md), [architecture](docs/architecture.md), and the
+[ADR index](docs/architecture.md#module-map).

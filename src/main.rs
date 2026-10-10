@@ -11,7 +11,7 @@ use std::ffi::OsString;
 use std::path::Path;
 use std::process::ExitCode;
 
-use clap::FromArgMatches;
+use clap::{FromArgMatches, ValueEnum};
 use domain::AppError;
 
 fn main() -> ExitCode {
@@ -26,29 +26,41 @@ fn main() -> ExitCode {
 
     let matches = match cli::command_tree(providers).try_get_matches_from(&argv) {
         Ok(matches) => matches,
-        Err(error) => return report_parse_failure(providers, error),
+        Err(error) => return report_parse_failure(providers, &argv, error),
     };
     let mut globals = match cli::GlobalArgs::from_arg_matches(&matches) {
         Ok(globals) => globals,
-        Err(error) => return report_parse_failure(providers, error),
+        Err(error) => return report_parse_failure(providers, &argv, error),
     };
     globals.code_provider = Some(providers.code);
     globals.work_item_provider = Some(providers.work_items);
     let command = match cli::ActiveCommand::from_matches(providers, &matches) {
         Ok(command) => command,
-        Err(error) => return report_parse_failure(providers, error),
+        Err(error) => return report_parse_failure(providers, &argv, error),
     };
+    let format = match commands::resolve_output_format(globals.format) {
+        Ok(format) => format,
+        Err(error) => {
+            output::error::write(globals.format.unwrap_or_default(), &error);
+            return ExitCode::FAILURE;
+        }
+    };
+    globals.resolved_format = format;
 
     match commands::execute(globals, command) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            output::json::write_error(&error);
+            output::error::write(format, &error);
             ExitCode::FAILURE
         }
     }
 }
 
-fn report_parse_failure(providers: config::ProviderSelection, error: clap::Error) -> ExitCode {
+fn report_parse_failure(
+    providers: config::ProviderSelection,
+    argv: &[OsString],
+    error: clap::Error,
+) -> ExitCode {
     match error.kind() {
         clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion => {
             let _ = error.print();
@@ -57,9 +69,16 @@ fn report_parse_failure(providers: config::ProviderSelection, error: clap::Error
         _ => {
             let message =
                 wrong_group_hint(providers, &error).unwrap_or("invalid command-line arguments");
-            output::json::write_error(&AppError::invalid_input(message));
+            output::error::write(parse_error_format(argv), &AppError::invalid_input(message));
             ExitCode::from(2)
         }
+    }
+}
+
+fn parse_error_format(argv: &[OsString]) -> cli::OutputFormat {
+    match cli::prescan_value(argv, "--format") {
+        Some(value) => cli::OutputFormat::from_str(&value, false).unwrap_or_default(),
+        None => commands::resolve_output_format(None).unwrap_or_default(),
     }
 }
 

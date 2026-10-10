@@ -79,7 +79,7 @@ pub(super) fn edit(
     number: u64,
     patch: &PrPatch,
     transition: Option<&PrTransition>,
-) -> Result<PullRequest, AppError> {
+) -> Result<(PullRequest, bool), AppError> {
     if !patch.attachments.is_empty() {
         super::super::require_attachment_support()?;
     }
@@ -108,7 +108,7 @@ pub(super) fn edit(
     }
     let native_edit = has_field(patch, body.is_some());
     if !native_edit && transition.is_none() {
-        return Ok(current);
+        return Ok((current, true));
     }
 
     let mut completed: Vec<String> = Vec::new();
@@ -211,19 +211,22 @@ pub(super) fn edit(
         }
     }
 
-    read::show(provider, number).map_err(|_| {
-        if completed.is_empty() {
-            AppError::provider_response()
-        } else {
-            partial_pr_transition_error(
-                &provider.repo,
-                number,
-                &completed,
-                &["pull request readback"],
-                &AppError::provider_response(),
-            )
-        }
-    })
+    let unchanged = completed.is_empty();
+    read::show(provider, number)
+        .map(|pull_request| (pull_request, unchanged))
+        .map_err(|_| {
+            if completed.is_empty() {
+                AppError::provider_response()
+            } else {
+                partial_pr_transition_error(
+                    &provider.repo,
+                    number,
+                    &completed,
+                    &["pull request readback"],
+                    &AppError::provider_response(),
+                )
+            }
+        })
 }
 
 /// Builds the canonical pull-request URL and reports an ordered partial result.

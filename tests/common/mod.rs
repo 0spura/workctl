@@ -446,7 +446,7 @@ if [ "$1" = "mr" ] && [ "$2" = "note" ] && [ "$3" = "create" ]; then
     exit 0
 fi
 if [ "$1" = "mr" ] && [ "$2" = "note" ] && [ "$3" = "list" ]; then
-    printf '%s\n' '[{"id":"abcdef123456","notes":[{"body":"Review note"}]}]'
+    printf '%s\n' '[{"id":"abcdef123456","notes":[{"id":"12345","body":"Review note"}]}]'
     exit 0
 fi
 if [ "$1" = "mr" ] && [ "$2" = "note" ] && [ "$3" = "update" ]; then
@@ -486,8 +486,12 @@ if [ "$1" = "mr" ]; then
             ;;
     esac
 fi
-if [ "$1" = "mr" ] && { [ "$2" = "approvers" ] || [ "$2" = "issues" ]; }; then
-    printf '%s\n' '[{"username":"reviewer"}]'
+if [ "$1" = "mr" ] && [ "$2" = "approvers" ]; then
+    printf '%s\n' '[{"id":101,"username":"reviewer"}]'
+    exit 0
+fi
+if [ "$1" = "mr" ] && [ "$2" = "issues" ]; then
+    printf '%s\n' '[{"iid":21,"id":2101,"title":"Linked issue","references":{"full":"group/project#21"}}]'
     exit 0
 fi
 if [ "$1" = "mr" ] && [ "$2" = "list" ]; then
@@ -655,6 +659,44 @@ exit 64
     pub fn run_pr(&self, args: &[&str], mode: &str) -> Output {
         let mut full_args = vec!["--provider", "github", "--repo", "owner/repo"];
         full_args.extend_from_slice(args);
+        self.run(&full_args, mode)
+    }
+    /// Runs a command with the structured success schema explicitly requested.
+    pub fn run_json(&self, args: &[&str], mode: &str) -> Output {
+        let mut full_args = args.to_vec();
+        if !full_args.contains(&"--format") {
+            full_args.extend_from_slice(&["--format", "json"]);
+        }
+        self.run(&full_args, mode)
+    }
+
+    /// Runs a GitHub issue command with the structured success schema explicitly requested.
+    pub fn run_issue_json(&self, args: &[&str], mode: &str) -> Output {
+        let mut full_args = vec!["--provider", "github", "--repo", "owner/repo"];
+        full_args.extend_from_slice(args);
+        if !full_args.contains(&"--format") {
+            full_args.extend_from_slice(&["--format", "json"]);
+        }
+        self.run(&full_args, mode)
+    }
+
+    /// Runs a GitHub pull-request command with the structured success schema explicitly requested.
+    pub fn run_pr_json(&self, args: &[&str], mode: &str) -> Output {
+        let mut full_args = vec!["--provider", "github", "--repo", "owner/repo"];
+        full_args.extend_from_slice(args);
+        if !full_args.contains(&"--format") {
+            full_args.extend_from_slice(&["--format", "json"]);
+        }
+        self.run(&full_args, mode)
+    }
+
+    /// Runs a GitLab command with the structured success schema explicitly requested.
+    pub fn run_gitlab_json(&self, args: &[&str], mode: &str) -> Output {
+        let mut full_args = vec!["--provider", "gitlab", "--repo", "group/sub/project"];
+        full_args.extend_from_slice(args);
+        if !full_args.contains(&"--format") {
+            full_args.extend_from_slice(&["--format", "json"]);
+        }
         self.run(&full_args, mode)
     }
 

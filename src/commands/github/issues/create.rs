@@ -156,5 +156,9 @@ pub(super) fn execute(globals: &GlobalArgs, args: CreateArgs) -> Result<SuccessO
         Some(plan) => provider.create_with_project(&new_issue, plan)?,
         None => provider.create(&new_issue)?,
     };
-    Ok(SuccessOutput::Issue(created))
+    Ok(SuccessOutput::IssueMutation(crate::output::IssueMutation {
+        issue: created,
+        action: crate::output::MutationAction::Created,
+        unchanged: false,
+    }))
 }

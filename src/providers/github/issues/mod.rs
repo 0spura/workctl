@@ -191,7 +191,7 @@ impl GitHubIssues {
         native: &NativeIssueEdit,
         plan: Option<&ProjectEditPlan>,
         transition: Option<&IssueTransition>,
-    ) -> Result<Issue, AppError> {
+    ) -> Result<(Issue, bool), AppError> {
         let body = self.fetch_for_edit(number, patch)?;
         write::edit_native(
             self,

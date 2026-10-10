@@ -117,11 +117,18 @@ pub(super) fn execute(globals: &GlobalArgs, args: UpdateArgs) -> Result<SuccessO
             Some(issue) => issue,
             None => provider.show(args.number.0)?,
         };
-        return Ok(SuccessOutput::Issue(issue));
+        return Ok(SuccessOutput::IssueMutation(crate::output::IssueMutation {
+            issue,
+            action: crate::output::MutationAction::Updated,
+            unchanged: true,
+        }));
     }
-    Ok(SuccessOutput::Issue(
-        provider.update(args.number.0, &patch)?,
-    ))
+    let issue = provider.update(args.number.0, &patch)?;
+    Ok(SuccessOutput::IssueMutation(crate::output::IssueMutation {
+        issue,
+        action: crate::output::MutationAction::Updated,
+        unchanged: false,
+    }))
 }
 
 fn validate_update_assignees(assignees: &[String], unassign: bool) -> Result<(), AppError> {

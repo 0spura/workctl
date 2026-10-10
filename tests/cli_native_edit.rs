@@ -77,7 +77,7 @@ fn state(fixture: &Fixture, number: u64) -> serde_json::Value {
 #[test]
 fn native_relationships_and_type_change_existing_issue_state() {
     let fixture = fixture();
-    let output = fixture.run_issue(
+    let output = fixture.run_issue_json(
         &[
             "issue",
             "edit",
@@ -111,7 +111,7 @@ fn native_relationships_and_type_change_existing_issue_state() {
         saved["blocking"],
         serde_json::json!(["https://github.com/other/repo/issues/400"])
     );
-    let removed = fixture.run_issue(
+    let removed = fixture.run_issue_json(
         &[
             "issue",
             "edit",
@@ -134,7 +134,7 @@ fn native_relationships_and_type_change_existing_issue_state() {
 #[test]
 fn native_short_flags_and_url_targets_preserve_body_and_metadata() {
     let fixture = fixture();
-    let output = fixture.run(
+    let output = fixture.run_json(
         &[
             "-R",
             "owner/repo",
@@ -163,7 +163,7 @@ fn native_short_flags_and_url_targets_preserve_body_and_metadata() {
     assert_eq!(saved["assignee"], serde_json::json!(["@me"]));
     let body = fixture.root.join("body.md");
     fs::write(&body, "File body").unwrap();
-    let output = fixture.run_issue(&["issue", "edit", "7", "-F", body.to_str().unwrap()], "");
+    let output = fixture.run_issue_json(&["issue", "edit", "7", "-F", body.to_str().unwrap()], "");
     assert_eq!(success_json(&output)["body"], "File body");
 }
 
@@ -171,7 +171,7 @@ fn native_short_flags_and_url_targets_preserve_body_and_metadata() {
 #[test]
 fn batch_edits_return_records_and_report_completed_targets_on_failure() {
     let fixture = fixture();
-    let output = fixture.run_issue(
+    let output = fixture.run_issue_json(
         &[
             "issue",
             "edit",
@@ -187,7 +187,15 @@ fn batch_edits_return_records_and_report_completed_targets_on_failure() {
     assert_eq!(result[1]["number"], 8);
     assert_eq!(result[0]["title"], "Batch title");
     assert_eq!(result[1]["body"], "Original body");
-    let failed = fixture.run_issue(
+    let compact_fixture = self::fixture();
+    let compact =
+        compact_fixture.run_issue(&["issue", "edit", "7", "8", "--title", "Batch title"], "");
+    assert!(compact.status.success());
+    assert_eq!(
+        String::from_utf8(compact.stdout).expect("UTF-8 text output"),
+        "#7 updated\n#8 updated\n"
+    );
+    let failed = fixture.run_issue_json(
         &["issue", "edit", "7", "8", "9", "--parent", "100"],
         "second-target-failure",
     );
@@ -238,7 +246,7 @@ fn native_edit_validation_and_guards_fail_before_writes() {
         assert!(!fixture.root.join("state-7.json").exists());
     }
     let fixture = fixture();
-    let output = fixture.run_issue(
+    let output = fixture.run_issue_json(
         &[
             "issue",
             "edit",
@@ -257,7 +265,7 @@ fn native_edit_validation_and_guards_fail_before_writes() {
 #[test]
 fn native_edit_readback_failure_preserves_completed_mutation() {
     let fixture = fixture();
-    let output = fixture.run_issue(
+    let output = fixture.run_issue_json(
         &["issue", "edit", "7", "--parent", "100"],
         "readback-failure",
     );

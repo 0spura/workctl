@@ -40,10 +40,18 @@ pub(super) fn execute(globals: &GlobalArgs, args: MergeRequestArgs) -> Result<()
             native_action(&provider, args.number.0, "unsubscribe")?
         }
         MergeRequestAction::Approvers(args) => {
-            SuccessOutput::ProviderData(provider.related_data("approvers", args.number.0)?)
+            SuccessOutput::GitLabData(crate::output::GitLabData::new(
+                "approvers",
+                args.number.0,
+                provider.related_data("approvers", args.number.0)?,
+            ))
         }
         MergeRequestAction::Issues(args) => {
-            SuccessOutput::ProviderData(provider.related_data("issues", args.number.0)?)
+            SuccessOutput::GitLabData(crate::output::GitLabData::new(
+                "issues",
+                args.number.0,
+                provider.related_data("issues", args.number.0)?,
+            ))
         }
         MergeRequestAction::Merge(args) => merge(&provider, &args)?,
         MergeRequestAction::Todo(args) => native_action(&provider, args.number.0, "todo")?,
@@ -145,8 +153,14 @@ fn create(provider: &GitLabMergeRequests, args: &CreateArgs) -> Result<SuccessOu
     if args.signoff {
         options.push("--signoff".to_owned());
     }
-    Ok(SuccessOutput::PullRequest(
-        provider.create(&options, description.as_deref())?,
+    let pull_request = provider.create(&options, description.as_deref())?;
+    Ok(SuccessOutput::PullRequestMutation(
+        crate::output::PullRequestMutation {
+            pull_request,
+            action: crate::output::MutationAction::Created,
+            unchanged: false,
+            gitlab: true,
+        },
     ))
 }
 
@@ -234,11 +248,16 @@ fn update(provider: &GitLabMergeRequests, args: &UpdateArgs) -> Result<SuccessOu
     if let Some(value) = args.squash_before_merge {
         options.push(format!("--squash-before-merge={value}"));
     }
-    Ok(SuccessOutput::PullRequest(provider.update(
-        args.number.0,
-        &options,
-        description.as_deref(),
-    )?))
+    let (pull_request, unchanged) =
+        provider.update(args.number.0, &options, description.as_deref())?;
+    Ok(SuccessOutput::PullRequestMutation(
+        crate::output::PullRequestMutation {
+            pull_request,
+            action: crate::output::MutationAction::Updated,
+            unchanged,
+            gitlab: true,
+        },
+    ))
 }
 
 fn list(provider: &GitLabMergeRequests, args: &ListArgs) -> Result<SuccessOutput, AppError> {
@@ -281,11 +300,15 @@ fn list(provider: &GitLabMergeRequests, args: &ListArgs) -> Result<SuccessOutput
     }
     filters.extend(["--page".to_owned(), args.page.to_string()]);
     filters.extend(["--per-page".to_owned(), args.per_page.to_string()]);
-    Ok(SuccessOutput::PullRequests(provider.list(&filters)?))
+    Ok(SuccessOutput::GitLabMergeRequests(
+        crate::output::GitLabMergeRequests(provider.list(&filters)?),
+    ))
 }
 
 fn view(provider: &GitLabMergeRequests, args: &ViewArgs) -> Result<SuccessOutput, AppError> {
-    Ok(SuccessOutput::PullRequest(provider.view(args.number.0)?))
+    Ok(SuccessOutput::GitLabMergeRequest(
+        crate::output::GitLabMergeRequest(provider.view(args.number.0)?),
+    ))
 }
 
 fn diff(provider: &GitLabMergeRequests, args: &DiffArgs) -> Result<SuccessOutput, AppError> {
@@ -300,9 +323,11 @@ fn checkout(
     args: &CheckoutArgs,
 ) -> Result<SuccessOutput, AppError> {
     provider.checkout(args.number.0)?;
-    Ok(SuccessOutput::Checkout {
-        number: args.number.0,
-    })
+    Ok(SuccessOutput::GitLabCheckout(
+        crate::output::GitLabCheckout {
+            number: args.number.0,
+        },
+    ))
 }
 
 fn set_state(
@@ -311,10 +336,10 @@ fn set_state(
     closed: bool,
 ) -> Result<SuccessOutput, AppError> {
     provider.set_state(number, closed)?;
-    Ok(SuccessOutput::State {
+    Ok(SuccessOutput::GitLabState(crate::output::GitLabState {
         number,
         state: if closed { "closed" } else { "open" }.to_owned(),
-    })
+    }))
 }
 
 fn native_action(
@@ -390,9 +415,11 @@ fn list_notes(
     if let Some(file) = args.file {
         filters.extend(["--file".to_owned(), file]);
     }
-    Ok(SuccessOutput::ProviderData(
+    Ok(SuccessOutput::GitLabData(crate::output::GitLabData::new(
+        "notes",
+        args.number.0,
         provider.list_notes(args.number.0, &filters)?,
-    ))
+    )))
 }
 
 fn update_note(
