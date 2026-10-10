@@ -80,7 +80,7 @@ pub(super) fn execute(globals: &GlobalArgs, args: CreateArgs) -> Result<SuccessO
     // Model configuration is resolved before any remote call: `@auto` and at least one
     // unclaimed Project field both require a model before the issue exists.
     let decision_model = (automatic || auto_project_fields)
-        .then(crate::decision_model::DecisionModel::from_environment)
+        .then(support::decision_model)
         .transpose()?;
     if !project_fields.is_empty() && project_profile.is_none() {
         return Err(AppError::invalid_input(

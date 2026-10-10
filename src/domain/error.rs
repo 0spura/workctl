@@ -85,14 +85,14 @@ impl AppError {
     pub const fn decision_authentication() -> Self {
         Self::new(
             "decision_authentication",
-            "a valid DECISION_MODEL_API_KEY is required for the selected hosted model",
+            "a valid decision-model API key is required for the selected hosted model; set DECISION_MODEL_API_KEY or configure decisionModel.apiKey in .workctl.local.json",
         )
     }
 
     pub const fn decision_config() -> Self {
         Self::new(
             "decision_config",
-            "DECISION_MODEL or local decision-service configuration is invalid",
+            "the decision-model configuration is invalid; select a supported model and keep the local base URL on loopback",
         )
     }
 

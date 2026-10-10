@@ -16,7 +16,7 @@ pub struct CreateArgs {
     /// Add an assignee; may be repeated
     #[arg(long = "assignee", value_name = "LOGIN", value_parser = common::parse_non_blank)]
     pub assignees: Vec<String>,
-    /// Add an existing label; use `@auto` to add labels selected by DECISION_MODEL
+    /// Add an existing label; use `@auto` to add labels selected by the configured decision model
     #[arg(long = "label", value_name = "NAME", value_parser = common::parse_non_blank)]
     pub labels: Vec<String>,
     /// Set the milestone by name, or `@current` for the nearest open milestone

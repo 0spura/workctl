@@ -143,6 +143,14 @@ fn project_config() -> Result<crate::config::Config, AppError> {
     crate::config::load_for_cwd(Path::new(&cwd))
 }
 
+/// Decision model for an opted-in automatic operation. Nonblank environment overrides are layered
+/// over `decisionModel` settings only when the command actually needs model classification, so a
+/// command without `@auto` never selects a model or consults a configured key.
+pub(super) fn decision_model() -> Result<crate::decision_model::DecisionModel, AppError> {
+    let settings = project_config()?.decision_model.unwrap_or_default();
+    crate::decision_model::DecisionModel::from_settings(&settings)
+}
+
 /// Configured success output format, when the files select one.
 pub(super) fn output_format_default() -> Result<Option<OutputFormatSetting>, AppError> {
     Ok(project_config()?

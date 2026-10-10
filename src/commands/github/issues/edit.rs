@@ -122,7 +122,7 @@ pub(super) fn execute(globals: &GlobalArgs, args: EditArgs) -> Result<SuccessOut
         ));
     }
     let model = (automatic || automatic_fields)
-        .then(crate::decision_model::DecisionModel::from_environment)
+        .then(support::decision_model)
         .transpose()?;
     let provider = GitHubIssues::new(repo.clone());
     provider.authenticate()?;

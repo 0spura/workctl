@@ -18,7 +18,30 @@ pub struct Config {
     pub provider: Option<Provider>,
     pub code_provider: Option<Provider>,
     pub work_item_provider: Option<Provider>,
+    pub decision_model: Option<DecisionModelSettings>,
     pub defaults: Option<Defaults>,
+}
+
+/// Decision-model settings. `apiKey` is accepted only in `.workctl.local.json`, so a shared
+/// configuration file can never commit a hosted credential.
+#[derive(Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DecisionModelSettings {
+    pub model: Option<String>,
+    pub api_key: Option<String>,
+    pub base_url: Option<String>,
+}
+
+/// Redacts the credential so diagnostics can never print it.
+impl std::fmt::Debug for DecisionModelSettings {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DecisionModelSettings")
+            .field("model", &self.model)
+            .field("api_key", &self.api_key.as_ref().map(|_| "[redacted]"))
+            .field("base_url", &self.base_url)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -136,13 +159,14 @@ struct ConfigFile {
     provider: Option<Provider>,
     code_provider: Option<Provider>,
     work_item_provider: Option<Provider>,
+    decision_model: Option<DecisionModelSettings>,
     defaults: Option<Defaults>,
 }
 
 pub fn load(root: &Path) -> Result<Config, AppError> {
     let mut config = Config::default();
-    merge_file(root.join(SHARED_FILE), &mut config)?;
-    merge_file(root.join(LOCAL_FILE), &mut config)?;
+    merge_file(root.join(SHARED_FILE), false, &mut config)?;
+    merge_file(root.join(LOCAL_FILE), true, &mut config)?;
     validate(&config)?;
     Ok(config)
 }
@@ -280,7 +304,13 @@ fn valid_repo_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
 }
 
-fn merge_file(path: impl AsRef<Path>, config: &mut Config) -> Result<(), AppError> {
+/// Merges one configuration file over the config accumulated so far. `allow_credentials` is true
+/// only for the gitignored local file; the shared file must never carry the decision-model key.
+fn merge_file(
+    path: impl AsRef<Path>,
+    allow_credentials: bool,
+    config: &mut Config,
+) -> Result<(), AppError> {
     let Some(contents) = read_config(path.as_ref())? else {
         return Ok(());
     };
@@ -294,6 +324,25 @@ fn merge_file(path: impl AsRef<Path>, config: &mut Config) -> Result<(), AppErro
     }
     if file.work_item_provider.is_some() {
         config.work_item_provider = file.work_item_provider;
+    }
+    if let Some(decision_model) = file.decision_model {
+        if decision_model.api_key.is_some() && !allow_credentials {
+            return Err(AppError::config(
+                "the decision-model API key is only allowed in .workctl.local.json",
+            ));
+        }
+        // Each decision-model key merges independently, so a local file can add its key without
+        // discarding a shared model or base URL.
+        let resolved = config.decision_model.get_or_insert_default();
+        if decision_model.model.is_some() {
+            resolved.model = decision_model.model;
+        }
+        if decision_model.api_key.is_some() {
+            resolved.api_key = decision_model.api_key;
+        }
+        if decision_model.base_url.is_some() {
+            resolved.base_url = decision_model.base_url;
+        }
     }
     if file.defaults.is_some() {
         config.defaults = file.defaults;
@@ -399,6 +448,59 @@ mod tests {
         assert_eq!(config.code_provider, Some(Provider::Gitlab));
         assert_eq!(config.work_item_provider, Some(Provider::Gitlab));
     }
+
+    #[test]
+    fn decision_model_keys_merge_per_key_with_a_local_only_api_key() {
+        let root = TempRoot::new();
+        fs::write(
+            root.0.join(".workctl.json"),
+            r#"{"decisionModel":{"model":"laya","baseUrl":"http://127.0.0.1:11434/v1"}}"#,
+        )
+        .expect("write shared decision-model settings");
+        fs::write(
+            root.0.join(".workctl.local.json"),
+            r#"{"decisionModel":{"model":"local/test-model","apiKey":"local-secret-token"}}"#,
+        )
+        .expect("write local decision-model settings");
+
+        let settings = load(&root.0)
+            .expect("load valid decision-model settings")
+            .decision_model
+            .expect("decision-model settings");
+        assert_eq!(settings.model.as_deref(), Some("local/test-model"));
+        assert_eq!(
+            settings.base_url.as_deref(),
+            Some("http://127.0.0.1:11434/v1")
+        );
+        assert_eq!(settings.api_key.as_deref(), Some("local-secret-token"));
+        assert!(!format!("{settings:?}").contains("local-secret-token"));
+    }
+
+    #[test]
+    fn shared_decision_model_api_key_is_rejected_without_echoing_it() {
+        let root = TempRoot::new();
+        fs::write(
+            root.0.join(".workctl.json"),
+            r#"{"decisionModel":{"model":"laya","apiKey":"shared-secret-token"}}"#,
+        )
+        .expect("write shared decision-model key");
+
+        let error = load(&root.0).expect_err("shared API key must fail closed");
+        assert_eq!(error.code, "config");
+        assert!(!error.message.contains("shared-secret-token"));
+    }
+
+    #[test]
+    fn unknown_decision_model_configuration_fails_closed() {
+        let root = TempRoot::new();
+        fs::write(
+            root.0.join(".workctl.json"),
+            r#"{"decisionModel":{"mode":"laya"}}"#,
+        )
+        .expect("write unknown decision-model key");
+        assert_eq!(load(&root.0).unwrap_err().code, "config");
+    }
+
     #[test]
     fn local_defaults_replace_shared_defaults_as_one_object() {
         let root = TempRoot::new();

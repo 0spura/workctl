@@ -2,7 +2,7 @@ use crate::cli::GlobalArgs;
 use crate::cli::gitlab::issues::CreateArgs;
 use crate::commands::labels::automatic_label_names;
 use crate::commands::support;
-use crate::decision_model::{DecisionInput, DecisionModel};
+use crate::decision_model::DecisionInput;
 use crate::domain::{AppError, DecisionCandidate};
 use crate::output::SuccessOutput;
 use crate::providers::gitlab::issues::{GitLabIssueCreate, GitLabIssues};
@@ -35,9 +35,7 @@ pub(super) fn execute(globals: &GlobalArgs, args: CreateArgs) -> Result<SuccessO
             labels.push(label);
         }
     }
-    let model = automatic
-        .then(DecisionModel::from_environment)
-        .transpose()?;
+    let model = automatic.then(support::decision_model).transpose()?;
     let repo = support::resolve_repo(globals.work_item_provider, globals.repo.as_deref())?;
     let provider = GitLabIssues::new(repo)?;
     provider.authenticate()?;

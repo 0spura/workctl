@@ -255,6 +255,111 @@ fn auto_marker_uses_local_llm_adapter_and_keeps_manual_labels() {
     assert!(!log.contains("--label @auto"));
 }
 
+// RF-CFG.9: `decisionModel` configuration selects the model and loopback endpoint without any
+// environment variable, a local `apiKey` is accepted without reaching the local adapter, and a
+// shared-file key fails closed without echoing the credential.
+#[test]
+fn decision_model_configuration_replaces_environment_configuration() {
+    let shared_key_fixture = Fixture::new();
+    shared_key_fixture.init_git();
+    fs::write(
+        shared_key_fixture.root.join(".workctl.json"),
+        r#"{"decisionModel":{"model":"laya","apiKey":"shared-secret-token"}}"#,
+    )
+    .expect("write shared decision-model key");
+    let rejected = shared_key_fixture.run_issue(
+        &[
+            "issue",
+            "create",
+            "--title",
+            "Shared key",
+            "--label",
+            "@auto",
+        ],
+        "",
+    );
+    assert_eq!(error_json(&rejected)["code"], "config");
+    assert!(!String::from_utf8_lossy(&rejected.stderr).contains("shared-secret-token"));
+    assert!(!shared_key_fixture.log.exists());
+
+    let fixture = Fixture::new();
+    fixture.init_git();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind local model fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let model = thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("accept model request");
+        let mut reader = std::io::BufReader::new(stream);
+        let mut headers = String::new();
+        let mut line = String::new();
+        let mut length = 0;
+        loop {
+            line.clear();
+            reader.read_line(&mut line).expect("read HTTP header");
+            if line == "\r\n" {
+                break;
+            }
+            headers.push_str(&line);
+            if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                length = value.trim().parse::<usize>().expect("content length");
+            }
+        }
+        let mut request = vec![0; length];
+        reader.read_exact(&mut request).expect("read model request");
+        let request: serde_json::Value = serde_json::from_slice(&request).expect("model JSON");
+        let prompt = request["messages"][1]["content"]
+            .as_str()
+            .expect("user prompt");
+        assert!(prompt.contains("Config parser regression"));
+        assert!(!prompt.contains("docs"));
+        let response = r#"{"choices":[{"message":{"content":"{\"suggestions\":[{\"label\":\"bug\",\"probability\":0.91}]}"}}]}"#;
+        let mut stream = reader.into_inner();
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            response.len(),
+            response
+        ).expect("write model response");
+        headers
+    });
+    fs::write(
+        fixture.root.join(".workctl.json"),
+        format!(
+            r#"{{"decisionModel":{{"model":"local/test-model","baseUrl":"http://{address}/v1"}},"defaults":{{"github":{{"issue":{{"labelCandidates":["bug"]}}}}}}}}"#
+        ),
+    )
+    .expect("write shared decision-model settings");
+    fs::write(
+        fixture.root.join(".workctl.local.json"),
+        r#"{"decisionModel":{"apiKey":"unused-local-key"}}"#,
+    )
+    .expect("write local decision-model key");
+    let output = fixture.run_with_configured_model(
+        &[
+            "--provider",
+            "github",
+            "--repo",
+            "owner/repo",
+            "issue",
+            "create",
+            "--title",
+            "Config parser regression",
+            "--label",
+            "@auto",
+        ],
+        "",
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let headers = model.join().expect("model fixture");
+    assert!(!headers.to_ascii_lowercase().contains("authorization"));
+    let log = fs::read_to_string(&fixture.log).expect("read GitHub fixture log");
+    assert!(log.contains("--label bug"));
+    assert!(!log.contains("--label @auto"));
+}
+
 #[test]
 fn invalid_inputs_and_unsupported_provider_fail_before_gh() {
     let fixture = Fixture::new();

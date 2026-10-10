@@ -52,8 +52,14 @@ struct Scores {
 pub struct LLMDecisionAdapter;
 
 impl LLMDecisionAdapter {
-    pub fn suggest(model: &str, input: DecisionInput<'_>) -> Result<Vec<DecisionScore>, AppError> {
-        let url = local_url("/chat/completions", DEFAULT_URL)?;
+    /// Sends one OpenAI-compatible Chat Completions request to `base_url`, defaulting to the
+    /// loopback service endpoint when configuration selects none.
+    pub fn suggest(
+        model: &str,
+        base_url: Option<&str>,
+        input: DecisionInput<'_>,
+    ) -> Result<Vec<DecisionScore>, AppError> {
+        let url = local_url_from(base_url.unwrap_or(DEFAULT_URL), "/chat/completions")?;
         let labels = input
             .candidates
             .iter()
@@ -118,11 +124,6 @@ impl LLMDecisionAdapter {
             serde_json::from_slice(content).map_err(|_| AppError::decision_response())?;
         ensure_scores(parsed.suggestions, input.candidates)
     }
-}
-
-fn local_url(path: &str, default: &str) -> Result<reqwest::Url, AppError> {
-    let raw = std::env::var("DECISION_MODEL_BASE_URL").unwrap_or_else(|_| default.to_owned());
-    local_url_from(&raw, path)
 }
 
 fn local_url_from(raw: &str, path: &str) -> Result<reqwest::Url, AppError> {

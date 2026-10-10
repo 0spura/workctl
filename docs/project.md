@@ -6,7 +6,7 @@
 - **CLI:** `clap` derive API; 4.6.7 was the latest release checked on 2026-10-01.
 - **Serialization:** `serde` and `serde_json` for strict config and provider payloads.
 - **External services:** `gh` owns GitHub operations; `glab` owns GitLab issue operations; `reqwest` backs the provider-neutral `DecisionModel` package and its explicit native/local model adapters.
-- **Model credentials:** hosted adapters read `DECISION_MODEL_API_KEY` only when `@auto` selects one; local endpoints are loopback-only and require no hosted key.
+- **Model credentials:** hosted adapters read `decisionModel.apiKey` (accepted only in the gitignored `.workctl.local.json`) or the `DECISION_MODEL_API_KEY` override only when `@auto` selects one; local endpoints are loopback-only and require no hosted key.
 - **Subprocesses:** `std::process::Command` behind one process runner; `wait-timeout` enforces the child deadline.
 - **Tests:** Rust unit and CLI integration tests use isolated HTTP/code-host fixtures; no live code-host mutation or hosted inference is part of tests.
 

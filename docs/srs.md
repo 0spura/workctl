@@ -29,10 +29,10 @@ Actors: a developer or coding agent running `workctl` locally. Observable behavi
 
 - `create` requires a nonblank title, accepts an optional body from `--body` or `--body-file FILE` (`-` reads standard input), and optionally accepts repeated `--assignee`, `--label`, `--project`, one `--milestone`, repeated `--attach FILE[#ALT]`.
 - `--label @auto` opts into automatic label selection through the provider-neutral `DecisionModel` package. It may be combined with manual `--label` values. Only labels with scores >= 0.8 are added.
-- `DECISION_MODEL` selects `jev-latest`, `laya`, `fastino/GLiDE`, or `local/<model-id>` for an OpenAI-compatible local Chat Completions service. Hosted adapters require `DECISION_MODEL_API_KEY`; local adapters do not.
+- `decisionModel.model` or the `DECISION_MODEL` override selects `jev-latest`, `laya`, `fastino/GLiDE`, or `local/<model-id>` for an OpenAI-compatible local Chat Completions service. Hosted adapters require `decisionModel.apiKey` (local configuration only) or `DECISION_MODEL_API_KEY`; local adapters do not.
 - The model package consumes generic work-item title/description and named candidates with optional descriptions; it does not depend on a code-host response type. Current issue commands use the active code-host provider; PR labeling is outside scope.
 - Native typed-decision adapters provide their own probabilities/confidence. Generic local LLM scores are generated estimates, not calibrated probabilities. All responses must cover each candidate exactly once with a finite score in [0,1].
-- `DECISION_MODEL_BASE_URL` configures only local services and must target loopback. Hosted endpoints are fixed. Model/configuration/credential/output failures prevent the issue write.
+- `decisionModel.baseUrl` or the `DECISION_MODEL_BASE_URL` override configures only local services and must target loopback. Hosted endpoints are fixed. Model/configuration/credential/output failures prevent the issue write.
 - `--milestone @current` assigns the open GitHub milestone with the nearest due date today or later. Overdue and undated milestones are ignored. If no milestone qualifies, or two milestones tie for the nearest eligible due date, creation fails with `invalid_input` before any write.
 - Omitting `--milestone` leaves the milestone unset and performs no milestone lookup, so no milestone is ever assigned implicitly. Any other value is a literal milestone name passed through unchanged. Issue edits never apply a default; omitted native metadata remains unchanged. Semantic declarations are a separate proposed extension (RF-WI.5), not part of the implemented create contract.
 - The command returns the created issue's number, title, body, state, URL, and timestamps. Missing body creates an empty body; no interactive prompt is opened.
@@ -565,8 +565,8 @@ Pull-request unlocking is now `pr lock NUMBER --undo`; there is no `pr unlock` a
 ### RF-CFG.1: Project configuration
 **Priority:** Must Have | **Status:** Implemented | **Dependencies:** none
 
-- Both optional files are discovered at the Git worktree root and validated on every command invocation, even when CLI flags override selected values. Local top-level fields, including the entire `defaults` object, replace the corresponding shared fields.
-- The strict schema contains legacy `provider`, independent `codeProvider` and `workItemProvider`, and `defaults`; code and work-item provider values are currently `github` or `gitlab`. `provider` remains a compatibility default for both domains; domain-specific fields override it. Linear is not yet a supported provider and must be rejected, never silently routed to GitHub or GitLab.
+- Both optional files are discovered at the Git worktree root and validated on every command invocation, even when CLI flags override selected values. Local top-level fields, including the entire `defaults` object, replace the corresponding shared fields; `decisionModel` merges key by key so a local credential can combine with shared settings (RF-CFG.9).
+- The strict schema contains legacy `provider`, independent `codeProvider` and `workItemProvider`, `decisionModel`, and `defaults`; code and work-item provider values are currently `github` or `gitlab`. `provider` remains a compatibility default for both domains; domain-specific fields override it. Linear is not yet a supported provider and must be rejected, never silently routed to GitHub or GitLab.
 - `.workctl.local.json` is gitignored. Old `.mcp-tracker*.json` files are not read or migrated.
 - No configuration file is required when providers and the command-specific repository can be resolved from flags or the Git origin.
 
@@ -647,6 +647,17 @@ Pull-request unlocking is now `pr lock NUMBER --undo`; there is no `pr unlock` a
 **Acceptance:** A configured limit reaches the provider for a listing that omits `--limit`, and an explicit `--limit` overrides it.
 **Verification:** Config unit tests and CLI integration tests asserting the forwarded provider argv.
 
+### RF-CFG.9: Decision-model configuration
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.1, RF-WI.1
+
+- `decisionModel.model` selects `jev-latest`, `laya`, `fastino/GLiDE`, or `local/<model-id>`; `decisionModel.baseUrl` configures the loopback-only OpenAI-compatible local endpoint. Hosted endpoints remain fixed.
+- `decisionModel.apiKey` is accepted only in `.workctl.local.json`. A shared file that carries it fails closed as a `config` error before provider or model access, and the credential never appears in output, errors, or logs.
+- Nonblank `DECISION_MODEL`, `DECISION_MODEL_API_KEY`, and `DECISION_MODEL_BASE_URL` environment variables override the matching configured key; a blank variable is treated as unset. `decisionModel` keys merge independently between the shared and local files.
+- The model is resolved only when an operation opts in through `@auto` or automatic Project-field selection. Without an opt-in, no model is selected and no configured credential is consulted.
+
+**Acceptance:** A configured model and base URL reach the model adapter with no `DECISION_MODEL*` environment set; a configured key is accepted in the local file and never sent to a local adapter; a shared-file key fails closed without echoing the credential; nonblank environment values override configuration key by key.
+**Verification:** Config unit tests, DecisionModel resolution unit tests, and a built-binary fixture that serves the configured loopback Chat Completions endpoint.
+
 ### RF-OUT.1: Output contract
 **Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CLI.1
 
@@ -676,8 +687,8 @@ Pull-request unlocking is now `pr lock NUMBER --undo`; there is no `pr unlock` a
 
 - Model requests occur only for issue create/edit automatic labels or opted-in Project field selection. Other operations do not send work-item text to a model.
 - The DecisionModel package receives provider-neutral work-item title/description and named candidates. Credentials and unrelated code-host metadata are not fetched for model context.
-- `DECISION_MODEL_API_KEY` is read only for the selected hosted Jev, Laya, or GLiDE adapter, sent only to its fixed HTTPS endpoint, and never stored, logged, or included in errors.
-- `DECISION_MODEL_BASE_URL` configures the OpenAI-compatible local LLM service and must be loopback. Local adapters do not receive hosted credentials.
+- A decision-model credential is read only for a selected hosted Jev, Laya, or GLiDE adapter, from `decisionModel.apiKey` in `.workctl.local.json` or the `DECISION_MODEL_API_KEY` override; it is sent only to that adapter's fixed HTTPS endpoint and never stored, logged, or included in errors. The shared `.workctl.json` must not contain `apiKey`.
+- `decisionModel.baseUrl` or the `DECISION_MODEL_BASE_URL` override configures the OpenAI-compatible local LLM service and must be loopback. Local adapters do not receive hosted credentials.
 - Requests and responses are bounded at 2 MiB and 1 MiB. Redirects are disabled. Model failures and malformed/incomplete label scores fail closed with safe errors; no retries occur.
 - Generic LLM scores are generated estimates and are not represented as calibrated model-native probabilities.
 

@@ -602,6 +602,30 @@ exit 64
         model: &str,
         base_url: Option<&str>,
     ) -> Output {
+        let mut command = self.command(args, mode);
+        command
+            .env("DECISION_MODEL", model)
+            .env_remove("DECISION_MODEL_API_KEY");
+        if let Some(base_url) = base_url {
+            command.env("DECISION_MODEL_BASE_URL", base_url);
+        } else {
+            command.env_remove("DECISION_MODEL_BASE_URL");
+        }
+        command.output().expect("run workctl binary")
+    }
+
+    /// Runs with no `DECISION_MODEL*` environment, so configuration is the only model source.
+    pub fn run_with_configured_model(&self, args: &[&str], mode: &str) -> Output {
+        self.command(args, mode)
+            .env_remove("DECISION_MODEL")
+            .env_remove("DECISION_MODEL_API_KEY")
+            .env_remove("DECISION_MODEL_BASE_URL")
+            .output()
+            .expect("run workctl binary")
+    }
+
+    /// Base command pointed at the isolated provider fixtures and the fixture worktree.
+    fn command(&self, args: &[&str], mode: &str) -> Command {
         let mut paths = vec![self.bin.clone()];
         paths.extend(std::env::split_paths(
             &std::env::var_os("PATH").unwrap_or_default(),
@@ -618,15 +642,8 @@ exit 64
             .env("WORKCTL_GH_MODE", mode)
             .env("WORKCTL_GLAB_LOG", &self.glab_log)
             .env("WORKCTL_GLAB_INPUT", &self.glab_input)
-            .env("WORKCTL_GLAB_MODE", mode)
-            .env("DECISION_MODEL", model)
-            .env_remove("DECISION_MODEL_API_KEY");
-        if let Some(base_url) = base_url {
-            command.env("DECISION_MODEL_BASE_URL", base_url);
-        } else {
-            command.env_remove("DECISION_MODEL_BASE_URL");
-        }
-        command.output().expect("run workctl binary")
+            .env("WORKCTL_GLAB_MODE", mode);
+        command
     }
 
     pub fn run_issue(&self, args: &[&str], mode: &str) -> Output {

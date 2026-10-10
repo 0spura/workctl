@@ -9,9 +9,9 @@ use super::references::IssueReference;
     after_help = "Body changes: pick at most one of --body, --append-body, --replace-section, or\n\
 --patch-file. The issue is fetched once, the change is applied to that text, and one write is sent.\n\
 With --add-label @auto or --project-field 'Priority=@auto', the final title/body is sent to\n\
-DECISION_MODEL in one request; the issue is fetched again before writes to reject concurrent\n\
-changes. Only named single-select/iteration fields are selected; scores below 0.8 or tied best\n\
-options preserve the current field value. Creation defaults are not reapplied.\n\n\
+the configured decision model in one request; the issue is fetched again before writes to reject\n\
+concurrent changes. Only named single-select/iteration fields are selected; scores below 0.8 or\n\
+tied best options preserve the current field value. Creation defaults are not reapplied.\n\n\
 --patch-file takes standard `git diff` output and locates each hunk by exact context match, not by\n\
 line number. Unmatched context is a patch_conflict error and nothing is written; there is no fuzzy\n\
 matching. Generate the diff against the body from `workctl issue view <NUMBER>` and pass that\n\
@@ -32,7 +32,7 @@ pub struct EditArgs {
     /// Remove an assignee; may be repeated
     #[arg(long = "remove-assignee", value_name = "LOGIN", value_delimiter = ',', value_parser = common::parse_non_blank)]
     pub assignees_remove: Vec<String>,
-    /// Add an existing label; use `@auto` to add labels selected by DECISION_MODEL
+    /// Add an existing label; use `@auto` to add labels selected by the configured decision model
     #[arg(long = "add-label", value_name = "NAME", value_delimiter = ',', value_parser = common::parse_non_blank)]
     pub labels_add: Vec<String>,
     /// Remove a label; `@auto` is reserved and cannot be removed
