@@ -15,17 +15,39 @@ pub(super) fn execute(globals: &GlobalArgs, args: CreateArgs) -> Result<SuccessO
         "use either --body or --body-file",
     )?
     .unwrap_or_default();
+    // RF-CFG.5: configured `defaults.github.pr` values merge with the explicit flags before the
+    // provider is reached.
+    let defaults = support::github_pr_defaults()?;
+    let base = args.base.or(defaults.base);
+    let draft = args.draft || defaults.draft;
+    let assignees = if args.assignees.is_empty() {
+        defaults.assignees
+    } else {
+        args.assignees
+    };
+    let reviewers = if args.reviewers.is_empty() {
+        defaults.reviewers
+    } else {
+        args.reviewers
+    };
+    // Configured labels precede explicit ones, with duplicates removed in first-seen order.
+    let mut labels = Vec::new();
+    for label in defaults.labels.iter().chain(args.labels.iter()) {
+        if !labels.contains(label) {
+            labels.push(label.clone());
+        }
+    }
     let provider = shared::provider(globals)?;
     Ok(SuccessOutput::PullRequest(provider.create(&NewPr {
         title: args.title,
         body,
-        base: args.base,
+        base,
         head: args.head,
-        draft: args.draft,
+        draft,
         closes: args.closes,
-        assignees: args.assignees,
-        labels: args.labels,
-        reviewers: args.reviewers,
+        assignees,
+        labels,
+        reviewers,
         milestone: args.milestone,
         projects: args.projects,
         attachments: args.attachments,

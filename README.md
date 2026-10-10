@@ -200,7 +200,9 @@ Optional strict JSON configuration files are discovered at the Git root and vali
 - `.workctl.json` can be committed for project-wide defaults.
 - `.workctl.local.json` overrides fields locally and is gitignored.
 
-Both files must be regular, non-symlink files no larger than 64 KiB. Supported fields include `provider` and `workItemProvider` (`github` or `gitlab`), GitHub issue defaults under `defaults.github.issue` (`assignees`, `labels`, `labelCandidates`, and an optional Project profile with `url`, exact `repositories`, `fields`, and `autoSelectFields`), and PR defaults under `defaults.github.pr` (`mergeMethod`: `merge|squash|rebase`; `deleteBranch`: boolean, default `false`). PR merge method precedence is explicit CLI option, configured default, then `gh` inference. The branch-deletion setting applies to every completed PR merge when true and deletes the remote branch only; the per-command `--delete-branch` option can enable deletion but cannot override a true config value, and neither applies to an `--auto` merge. Local top-level values override shared values; a local `defaults` object replaces the shared defaults object as a whole. Unknown fields and malformed JSON fail closed. Legacy `.mcp-tracker*.json` configuration is not read or migrated.
+Both files must be regular, non-symlink files no larger than 64 KiB. Supported fields include `provider` and `workItemProvider` (`github` or `gitlab`), GitHub issue defaults under `defaults.github.issue` (`assignees`, `labels`, `labelCandidates`, and an optional Project profile with `url`, exact `repositories`, `fields`, and `autoSelectFields`), GitHub pull-request defaults under `defaults.github.pr` (`mergeMethod`: `merge|squash|rebase`; `deleteBranch`: boolean, default `false`; plus `labels`, `assignees`, `reviewers`, `base`, and boolean `draft` for `pr create`), GitLab create defaults under `defaults.gitlab.issue` (`labels`, `assignees`) and `defaults.gitlab.mr` (`labels`, `assignees`, `reviewers`, `targetBranch`, boolean `draft`), the success format under `defaults.output.format` (`json` or `text`), and the listing limit under `defaults.github.listLimit` (1–1000).
+
+Configured defaults never override an explicit flag. Configured labels precede explicit labels with duplicates removed, explicit `--assignee`/`--reviewer` replace configured lists, explicit `--base`/`--target-branch` and `--format` win, and `--limit` wins over `defaults.github.listLimit`, which falls back to 30. PR merge method precedence is explicit CLI option, configured default, then `gh` inference. The branch-deletion setting applies to every completed PR merge when true and deletes the remote branch only; the per-command `--delete-branch` option can enable deletion but cannot override a true config value, and neither applies to an `--auto` merge. Local top-level values override shared values; a local `defaults` object replaces the shared defaults object as a whole. Unknown fields and malformed JSON fail closed. Legacy `.mcp-tracker*.json` configuration is not read or migrated.
 
 
 Example:
@@ -225,8 +227,22 @@ Example:
       },
       "pr": {
         "mergeMethod": "squash",
-        "deleteBranch": false
+        "deleteBranch": false,
+        "labels": ["triaged"],
+        "base": "main"
+      },
+      "listLimit": 50
+    },
+    "gitlab": {
+      "mr": {
+        "labels": ["backend"],
+        "reviewers": ["@me"],
+        "targetBranch": "main",
+        "draft": true
       }
+    },
+    "output": {
+      "format": "text"
     }
   }
 }

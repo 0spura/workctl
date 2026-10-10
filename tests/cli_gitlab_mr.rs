@@ -428,3 +428,83 @@ fn gitlab_mr_note_list_filters_and_update_use_native_subcommands() {
     )));
     assert!(calls.contains(&format!("mr note update 5 12345 --repo {PROJECT}")));
 }
+
+// RF-CFG.6: configured GitLab merge-request defaults fill the options the caller omitted.
+#[test]
+fn rf_cfg_6_gitlab_mr_create_applies_configured_defaults() {
+    let fixture = Fixture::new();
+    fixture.init_git();
+    std::fs::write(
+        fixture.root.join(".workctl.json"),
+        r#"{"defaults":{"gitlab":{"mr":{"labels":["backend","triage"],"assignees":["default-user"],"reviewers":["default-reviewer"],"targetBranch":"develop","draft":true}}}}"#,
+    )
+    .expect("write GitLab merge-request defaults");
+
+    let output = fixture.run_gitlab(
+        &[
+            "mr", "create", "--title", "Defaults", "--label", "triage", "--label", "docs",
+        ],
+        "",
+    );
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let calls = fixture.glab_invocations();
+    assert!(
+        calls.iter().any(|call| call == &format!(
+            "mr create --repo {PROJECT} --title Defaults --description= --yes --no-editor \
+             --target-branch=develop --assignee=default-user --label=backend --label=triage \
+             --label=docs --reviewer=default-reviewer --draft"
+        )),
+        "glab invocations: {calls:?}"
+    );
+}
+
+// RF-CFG.6: explicit assignee, reviewer, and target-branch flags replace the configured defaults;
+// no inverse flag exists for the configured draft, so it still applies.
+#[test]
+fn rf_cfg_6_gitlab_mr_create_explicit_flags_replace_configured_defaults() {
+    let fixture = Fixture::new();
+    fixture.init_git();
+    std::fs::write(
+        fixture.root.join(".workctl.json"),
+        r#"{"defaults":{"gitlab":{"mr":{"labels":["backend"],"assignees":["default-user"],"reviewers":["default-reviewer"],"targetBranch":"develop","draft":true}}}}"#,
+    )
+    .expect("write GitLab merge-request defaults");
+
+    let output = fixture.run_gitlab(
+        &[
+            "mr",
+            "create",
+            "--title",
+            "Override",
+            "--target-branch",
+            "main",
+            "--assignee",
+            "alice",
+            "--reviewer",
+            "bob",
+        ],
+        "",
+    );
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let calls = fixture.glab_invocations();
+    assert!(
+        calls.iter().any(|call| call == &format!(
+            "mr create --repo {PROJECT} --title Override --description= --yes --no-editor \
+             --target-branch=main --assignee=alice --label=backend --reviewer=bob --draft"
+        )),
+        "glab invocations: {calls:?}"
+    );
+    assert!(!calls.iter().any(|call| call.contains("default-user")
+        || call.contains("default-reviewer")
+        || call.contains("develop")));
+}

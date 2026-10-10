@@ -24,5 +24,5 @@ pub(super) fn execute(globals: &GlobalArgs, args: IssueArgs) -> Result<(), AppEr
         IssueAction::Lock(args) => lock::execute(globals, args)?,
         IssueAction::Develop(args) => develop::execute(globals, args)?,
     };
-    output::write(globals.format, &output)
+    output::write(globals.resolved_format, &output)
 }

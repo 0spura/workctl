@@ -16,11 +16,25 @@ pub(super) fn execute(globals: &GlobalArgs, args: CreateArgs) -> Result<SuccessO
     .ok_or(AppError::invalid_input(
         "issue create requires --description or --description-file",
     ))?;
-    validate_create_assignees(&args.assignees)?;
+    // RF-CFG.6: configured `defaults.gitlab.issue` values merge with the explicit flags before the
+    // provider is reached.
+    let defaults = support::gitlab_issue_defaults()?;
+    let mut explicit_labels = args.labels;
+    let automatic = explicit_labels.iter().any(|label| label == "@auto");
+    explicit_labels.retain(|label| label != "@auto");
+    let mut assignees = args.assignees;
+    if assignees.is_empty() {
+        assignees = defaults.assignees;
+    }
+    validate_create_assignees(&assignees)?;
 
-    let mut labels = args.labels;
-    let automatic = labels.iter().any(|label| label == "@auto");
-    labels.retain(|label| label != "@auto");
+    // Configured labels precede explicit ones, with duplicates removed in first-seen order.
+    let mut labels = Vec::new();
+    for label in defaults.labels.into_iter().chain(explicit_labels) {
+        if !labels.contains(&label) {
+            labels.push(label);
+        }
+    }
     let model = automatic
         .then(DecisionModel::from_environment)
         .transpose()?;
@@ -53,7 +67,7 @@ pub(super) fn execute(globals: &GlobalArgs, args: CreateArgs) -> Result<SuccessO
             title: args.title,
             description,
             labels,
-            assignees: args.assignees,
+            assignees,
             milestone: args.milestone,
             confidential: args.confidential,
             weight: args.weight,

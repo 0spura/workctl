@@ -710,6 +710,98 @@ fn rf_gl_6_gitlab_auto_labels_fail_closed_on_invalid_or_oversized_catalogs() {
         assert!(!invocations.contains("issue create"));
     }
 }
+// RF-CFG.6: configured GitLab issue defaults merge with the explicit flags before the provider runs.
+#[test]
+fn rf_cfg_6_gitlab_issue_create_merges_configured_defaults_with_explicit_labels() {
+    let fixture = Fixture::new();
+    fixture.init_git();
+    std::fs::write(
+        fixture.root.join(".workctl.json"),
+        r#"{"defaults":{"gitlab":{"issue":{"labels":["bug","triage"],"assignees":["default-user"]}}}}"#,
+    )
+    .expect("write GitLab issue defaults");
+
+    let output = fixture.run_gitlab(
+        &[
+            "issue",
+            "create",
+            "--title",
+            "Defaults",
+            "--description",
+            "Configured defaults",
+            "--label",
+            "triage",
+            "--label",
+            "docs",
+        ],
+        "",
+    );
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fixture.glab_invocations(),
+        vec![
+            "auth status --hostname gitlab.com".to_owned(),
+            format!(
+                "issue create --repo {PROJECT} --title=Defaults --description= --yes \
+                 --label=bug --label=triage --label=docs --assignee=default-user"
+            ),
+            "api --method PUT projects/group%2Fsub%2Fproject/issues/21 --hostname gitlab.com --input -"
+                .to_owned(),
+            format!("issue view --output json --repo {PROJECT} 21"),
+        ]
+    );
+}
+
+// RF-CFG.6: an explicit `--assignee` replaces the configured GitLab issue assignees.
+#[test]
+fn rf_cfg_6_gitlab_issue_create_explicit_assignee_replaces_configured_defaults() {
+    let fixture = Fixture::new();
+    fixture.init_git();
+    std::fs::write(
+        fixture.root.join(".workctl.json"),
+        r#"{"defaults":{"gitlab":{"issue":{"labels":["bug"],"assignees":["default-user"]}}}}"#,
+    )
+    .expect("write GitLab issue defaults");
+
+    let output = fixture.run_gitlab(
+        &[
+            "issue",
+            "create",
+            "--title",
+            "Override",
+            "--description",
+            "Explicit assignee",
+            "--assignee",
+            "alice",
+        ],
+        "",
+    );
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let invocations = fixture.glab_invocations();
+    assert!(
+        invocations.iter().any(|call| call == &format!(
+            "issue create --repo {PROJECT} --title=Override --description= --yes \
+             --label=bug --assignee=alice"
+        )),
+        "glab invocations: {invocations:?}"
+    );
+    assert!(
+        !invocations
+            .iter()
+            .any(|call| call.contains("--assignee=default-user"))
+    );
+}
+
 fn local_model(response: &'static str) -> (String, thread::JoinHandle<serde_json::Value>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind local model");
     let address = listener.local_addr().expect("model address");

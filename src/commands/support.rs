@@ -2,13 +2,17 @@ use std::fs;
 use std::io::Read;
 use std::path::Path;
 
+use crate::cli::OutputFormat;
 use crate::cli::common::BodyChangeArgs;
-use crate::config::{self, Provider};
+use crate::config::{self, OutputFormatSetting, Provider};
 use crate::domain::AppError;
 use crate::providers::BodyChange;
 
 /// Upper bound for any body text read from a file or standard input.
 const MAX_TEXT_BYTES: u64 = 1024 * 1024;
+
+/// Fallback `--limit` for GitHub listings when neither the flag nor configuration sets one.
+const DEFAULT_LIST_LIMIT: usize = 30;
 
 /// Resolves a value given either inline or as a file, rejecting both at once.
 pub(super) fn optional_text(
@@ -132,12 +136,54 @@ pub(super) fn resolve_repo(
     ))?;
     config::resolve_domain_context(provider, explicit_repo, Path::new(&cwd))
 }
+/// Project configuration for the current directory, or an empty one outside a worktree.
+fn project_config() -> Result<crate::config::Config, AppError> {
+    let cwd = std::env::current_dir()
+        .map_err(|_| AppError::context("could not determine the current directory"))?;
+    crate::config::load_for_cwd(Path::new(&cwd))
+}
+
+/// Configured success output format, when the files select one.
+pub(super) fn output_format_default() -> Result<Option<OutputFormatSetting>, AppError> {
+    Ok(project_config()?
+        .defaults
+        .and_then(|defaults| defaults.output)
+        .and_then(|output| output.format))
+}
+
+/// Success output format: explicit `--format`, then `defaults.output.format`, then JSON.
+pub(super) fn resolve_output_format(
+    explicit: Option<OutputFormat>,
+) -> Result<OutputFormat, AppError> {
+    if let Some(format) = explicit {
+        return Ok(format);
+    }
+    Ok(match output_format_default()? {
+        Some(OutputFormatSetting::Json) | None => OutputFormat::Json,
+        Some(OutputFormatSetting::Text) => OutputFormat::Text,
+    })
+}
+
+/// Default `--limit` for GitHub listings: explicit flag, then configuration, then 30.
+pub(super) fn github_list_limit_or(explicit: Option<usize>) -> Result<usize, AppError> {
+    match explicit {
+        Some(limit) => Ok(limit),
+        None => Ok(github_list_limit()?.unwrap_or(DEFAULT_LIST_LIMIT)),
+    }
+}
+
+/// Configured `--limit` default for GitHub listings, when the files set one.
+fn github_list_limit() -> Result<Option<usize>, AppError> {
+    Ok(project_config()?
+        .defaults
+        .and_then(|defaults| defaults.github)
+        .and_then(|github| github.list_limit))
+}
+
 pub(super) fn github_issue_defaults(
     repo: &str,
 ) -> Result<Option<crate::config::GithubIssueDefaults>, AppError> {
-    let cwd = std::env::current_dir()
-        .map_err(|_| AppError::context("could not determine the current directory"))?;
-    let config = crate::config::load_for_cwd(Path::new(&cwd))?;
+    let config = project_config()?;
     let Some(issue) = config
         .defaults
         .and_then(|defaults| defaults.github)
@@ -165,12 +211,27 @@ pub(super) fn github_issue_defaults(
 }
 
 pub(super) fn github_pr_defaults() -> Result<crate::config::GithubPrDefaults, AppError> {
-    let cwd = std::env::current_dir()
-        .map_err(|_| AppError::context("could not determine the current directory"))?;
-    let config = crate::config::load_for_cwd(Path::new(&cwd))?;
-    Ok(config
+    Ok(project_config()?
         .defaults
         .and_then(|defaults| defaults.github)
         .and_then(|github| github.pr)
+        .unwrap_or_default())
+}
+
+/// GitLab issue defaults, or an empty set when none are configured.
+pub(super) fn gitlab_issue_defaults() -> Result<crate::config::GitlabIssueDefaults, AppError> {
+    Ok(project_config()?
+        .defaults
+        .and_then(|defaults| defaults.gitlab)
+        .and_then(|gitlab| gitlab.issue)
+        .unwrap_or_default())
+}
+
+/// GitLab merge-request defaults, or an empty set when none are configured.
+pub(super) fn gitlab_mr_defaults() -> Result<crate::config::GitlabMrDefaults, AppError> {
+    Ok(project_config()?
+        .defaults
+        .and_then(|defaults| defaults.gitlab)
+        .and_then(|gitlab| gitlab.mr)
         .unwrap_or_default())
 }

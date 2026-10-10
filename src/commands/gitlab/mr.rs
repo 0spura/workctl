@@ -49,7 +49,7 @@ pub(super) fn execute(globals: &GlobalArgs, args: MergeRequestArgs) -> Result<()
         MergeRequestAction::Todo(args) => native_action(&provider, args.number.0, "todo")?,
         MergeRequestAction::Note(args) => note(&provider, args.action)?,
     };
-    output::write(globals.format, &result)
+    output::write(globals.resolved_format, &result)
 }
 
 fn create(provider: &GitLabMergeRequests, args: &CreateArgs) -> Result<SuccessOutput, AppError> {
@@ -58,6 +58,27 @@ fn create(provider: &GitLabMergeRequests, args: &CreateArgs) -> Result<SuccessOu
         args.description_file.as_deref(),
         "use either --description or --description-file",
     )?;
+    // RF-CFG.6: configured `defaults.gitlab.mr` values fill what the flags left unspecified.
+    let defaults = support::gitlab_mr_defaults()?;
+    let target_branch = args
+        .target_branch
+        .as_deref()
+        .or(defaults.target_branch.as_deref());
+    let mut assignees = args.assignees.clone();
+    if assignees.is_empty() {
+        assignees = defaults.assignees.clone();
+    }
+    let mut reviewers = args.reviewers.clone();
+    if reviewers.is_empty() {
+        reviewers = defaults.reviewers.clone();
+    }
+    // Configured labels precede explicit ones, with duplicates removed in first-seen order.
+    let mut labels = Vec::new();
+    for label in defaults.labels.iter().chain(args.labels.iter()) {
+        if !labels.contains(label) {
+            labels.push(label.clone());
+        }
+    }
     let mut options = vec![
         "--title".to_owned(),
         args.title.clone(),
@@ -67,7 +88,7 @@ fn create(provider: &GitLabMergeRequests, args: &CreateArgs) -> Result<SuccessOu
     ];
     for (flag, value) in [
         ("--source-branch", args.source_branch.as_deref()),
-        ("--target-branch", args.target_branch.as_deref()),
+        ("--target-branch", target_branch),
         ("--head", args.head.as_deref()),
         ("--milestone", args.milestone.as_deref()),
         ("--template", args.template.as_deref()),
@@ -77,15 +98,15 @@ fn create(provider: &GitLabMergeRequests, args: &CreateArgs) -> Result<SuccessOu
         }
     }
     for (flag, values) in [
-        ("--assignee", &args.assignees),
-        ("--label", &args.labels),
-        ("--reviewer", &args.reviewers),
+        ("--assignee", &assignees),
+        ("--label", &labels),
+        ("--reviewer", &reviewers),
     ] {
         for value in values {
             options.push(format!("{flag}={value}"));
         }
     }
-    if args.draft {
+    if args.draft || defaults.draft {
         options.push("--draft".to_owned());
     }
     if args.wip {

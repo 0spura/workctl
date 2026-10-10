@@ -11,9 +11,9 @@ pub struct ListArgs {
     /// Pull request state to list
     #[arg(long, value_enum, default_value = "open")]
     pub state: PrListState,
-    /// Maximum number of pull requests to return
-    #[arg(long, default_value_t = 30, value_parser = common::parse_limit)]
-    pub limit: usize,
+    /// Maximum number of pull requests to return; defaults to defaults.github.listLimit, then 30
+    #[arg(long, value_parser = common::parse_limit)]
+    pub limit: Option<usize>,
     /// Filter by label; may be repeated
     #[arg(long = "label", value_name = "NAME", value_parser = common::parse_non_blank)]
     pub labels: Vec<String>,

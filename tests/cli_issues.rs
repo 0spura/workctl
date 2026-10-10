@@ -1945,3 +1945,58 @@ fn develop_reports_unreadable_provider_output() {
     assert_eq!(error_json(&list)["code"], "provider_response");
     assert!(list.stdout.is_empty());
 }
+
+// RF-CFG.8: `defaults.github.listLimit` supplies the listing limit until `--limit` overrides it.
+#[test]
+fn configured_list_limit_applies_until_the_flag_overrides_it() {
+    let fixture = Fixture::new();
+    fixture.init_git();
+    fs::write(
+        fixture.root.join(".workctl.json"),
+        r#"{"defaults":{"github":{"listLimit":7}}}"#,
+    )
+    .expect("write list limit config");
+
+    assert_eq!(
+        success_json(&fixture.run_issue(&["issue", "list"], ""))
+            .as_array()
+            .expect("issue list")
+            .len(),
+        2
+    );
+    success_json(&fixture.run_issue(&["issue", "list", "--limit", "3"], ""));
+
+    let log = gh_lines(&fixture);
+    assert!(
+        log.iter().any(|line| line.contains("--limit 7 --json")),
+        "{log:?}"
+    );
+    assert!(
+        log.iter().any(|line| line.contains("--limit 3 --json")),
+        "{log:?}"
+    );
+}
+
+// RF-CFG.7: `defaults.output.format` selects the success format until `--format` overrides it.
+#[test]
+fn configured_output_format_applies_until_the_flag_overrides_it() {
+    let fixture = Fixture::new();
+    fixture.init_git();
+    fs::write(
+        fixture.root.join(".workctl.json"),
+        r#"{"defaults":{"output":{"format":"text"}}}"#,
+    )
+    .expect("write output format config");
+
+    let text = fixture.run_issue(&["issue", "view", "7"], "");
+    assert!(
+        text.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&text.stderr)
+    );
+    let text = String::from_utf8(text.stdout).expect("text output is UTF-8");
+    assert!(text.starts_with("#7 Provider title [open]\n"), "{text:?}");
+
+    let json = fixture.run_issue(&["issue", "view", "7", "--format", "json"], "");
+    assert_eq!(success_json(&json)["url"], "https://github.com/owner/repo/issues/7");
+}

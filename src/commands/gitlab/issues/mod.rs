@@ -25,5 +25,5 @@ pub(super) fn execute(globals: &GlobalArgs, args: IssueArgs) -> Result<(), AppEr
         }
         IssueAction::Note(args) => note::execute(globals, args)?,
     };
-    output::write(globals.format, &output)
+    output::write(globals.resolved_format, &output)
 }

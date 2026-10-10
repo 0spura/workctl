@@ -579,6 +579,18 @@ exit 64
         }
     }
 
+    /// Initializes the fixture root as a Git worktree, so project configuration is discovered.
+    pub fn init_git(&self) {
+        assert!(
+            Command::new("git")
+                .args(["init", "--quiet"])
+                .current_dir(&self.root)
+                .status()
+                .expect("initialize fixture repository")
+                .success()
+        );
+    }
+
     pub fn run(&self, args: &[&str], mode: &str) -> Output {
         self.run_with_model(args, mode, "jev-latest", None)
     }

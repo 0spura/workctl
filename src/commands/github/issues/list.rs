@@ -1,5 +1,6 @@
 use crate::cli::GlobalArgs;
 use crate::cli::github::issues::ListArgs;
+use crate::commands::support;
 use crate::domain::AppError;
 use crate::output::SuccessOutput;
 use crate::providers::{IssueQuery, WorkItemProvider};
@@ -15,7 +16,7 @@ pub(super) fn execute(globals: &GlobalArgs, args: &ListArgs) -> Result<SuccessOu
 fn query(args: &ListArgs) -> Result<IssueQuery, AppError> {
     Ok(IssueQuery {
         state: args.state.as_str().to_owned(),
-        limit: args.limit,
+        limit: support::github_list_limit_or(args.limit)?,
         labels: args.labels.clone(),
         assignee: args.assignee.clone(),
         author: args.author.clone(),

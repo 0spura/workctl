@@ -608,10 +608,49 @@ Pull-request unlocking is now `pr lock NUMBER --undo`; there is no `pr unlock` a
 **Acceptance:** Valid typed defaults are applied with the precedence above; missing deleteBranch behaves as false; invalid method values and unknown config keys prevent provider access.
 **Verification:** Config unit tests and isolated `tests/cli_prs.rs` merge invocations.
 
+### RF-CFG.5: GitHub pull-request create defaults
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.1, RF-CFG.2
+
+- `defaults.github.pr` also accepts `labels`, `assignees`, `reviewers`, an optional `base`, and boolean `draft` (default `false`). These keys apply to `pr create` only; `mergeMethod` and `deleteBranch` keep applying to `pr merge`.
+- Configured labels precede explicit `--label` values, with duplicates removed in first-seen order. Explicit `--assignee` and `--reviewer` values replace the configured lists. Explicit `--base` overrides the configured base. A configured `draft: true` adds the draft flag unless the caller already passed `--draft`.
+- Blank values, `@auto` in `labels`, and unknown keys fail closed as `config` errors before provider access.
+
+**Acceptance:** Configured create defaults reach `gh pr create` with the precedence above, and no create key changes the argv of `pr merge`.
+**Verification:** Config unit tests and isolated `tests/cli_prs.rs` create invocations.
+
+### RF-CFG.6: GitLab create defaults
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.1, RF-CFG.2
+
+- `defaults.gitlab.issue` accepts `labels` and `assignees` for `issue create`. `defaults.gitlab.mr` accepts `labels`, `assignees`, `reviewers`, an optional `targetBranch`, and boolean `draft` (default `false`) for `mr create`.
+- Configured labels precede explicit labels, with duplicates removed in first-seen order. Explicit assignees and reviewers replace the configured lists. Explicit `--target-branch` overrides `targetBranch`. A configured `draft: true` adds the draft flag when the caller passed neither `--draft` nor `--wip`.
+- Blank values and unknown keys fail closed as `config` errors before provider access.
+
+**Acceptance:** Configured create defaults reach `glab` with the precedence above, and no other GitLab command changes its argv.
+**Verification:** Config unit tests and isolated `tests/cli_gitlab.rs`/`tests/cli_gitlab_mr.rs` create invocations.
+
+### RF-CFG.7: Output format default
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.1
+
+- `defaults.output.format` accepts `json` or `text` and selects the success output format for every command, in both provider domains.
+- Precedence is explicit `--format`, then `defaults.output.format`, then `json`. Errors remain one JSON object on stderr regardless of the selected success format.
+- An unsupported value fails closed as a `config` error before provider access.
+
+**Acceptance:** A configured format changes success output for an invocation that omits `--format`, and `--format` restores the explicit choice.
+**Verification:** Config unit tests and CLI integration tests asserting the output stream.
+
+### RF-CFG.8: GitHub list limit default
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.1
+
+- `defaults.github.listLimit` accepts an integer from 1 to 1000 and supplies the `--limit` default for `issue list` and `pr list`.
+- Precedence is explicit `--limit`, then `defaults.github.listLimit`, then 30. An out-of-range value fails closed as a `config` error before provider access.
+
+**Acceptance:** A configured limit reaches the provider for a listing that omits `--limit`, and an explicit `--limit` overrides it.
+**Verification:** Config unit tests and CLI integration tests asserting the forwarded provider argv.
+
 ### RF-OUT.1: Output contract
 **Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CLI.1
 
-- Success output is compact JSON by default; `--format text` selects human-readable output.
+- Success output is compact JSON by default; `--format text` selects human-readable output, and `defaults.output.format` selects the same format for every invocation (RF-CFG.7).
 - Text output escapes terminal control characters in provider values; issue-body newlines and tabs remain layout characters.
 - Errors are one JSON object on stderr with a stable `code` and safe `message`; partial success may include structured `details` describing the affected resource and completed/pending operations. All failures exit nonzero and leave stdout empty.
 - User-facing errors do not include raw provider stderr, credentials, stack traces, or internal paths. Partial-success error types remain provider-neutral.

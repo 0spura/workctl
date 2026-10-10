@@ -883,7 +883,142 @@ fn merge_uses_configured_method_and_boolean_branch_default() {
     );
 }
 
-// RF-PR.7, RF-PR.10: `--delete-branch` removes the remote head ref and never a local branch.
+// RF-CFG.5: configured labels precede explicit ones, duplicates collapse in first-seen order, and a
+// configured base and draft fill the flags the caller omitted.
+#[test]
+fn rf_cfg_5_pr_create_applies_configured_labels_base_and_draft() {
+    let fixture = Fixture::new();
+    fixture.init_git();
+    fs::write(
+        fixture.root.join(".workctl.json"),
+        r#"{"defaults":{"github":{"pr":{"labels":["bug","triage"],"base":"develop","draft":true}}}}"#,
+    )
+    .expect("write GitHub pull-request defaults");
+
+    let created = fixture.run_pr(
+        &[
+            "pr", "create", "--title", "Defaults", "--label", "triage", "--label", "p1",
+        ],
+        "",
+    );
+    assert_eq!(success_json(&created)["number"], 42);
+    let lines = gh_lines(&fixture);
+    assert!(
+        lines.contains(
+            &"pr create --repo owner/repo --title Defaults --body-file - --base develop --draft --label bug --label triage --label p1"
+                .to_string()
+        ),
+        "actual gh calls: {lines:?}"
+    );
+}
+
+// RF-CFG.5: configured assignees and reviewers apply until an explicit flag replaces them.
+#[test]
+fn rf_cfg_5_pr_create_configured_assignees_and_reviewers_apply_until_overridden() {
+    let fixture = Fixture::new();
+    fixture.init_git();
+    fs::write(
+        fixture.root.join(".workctl.json"),
+        r#"{"defaults":{"github":{"pr":{"assignees":["default-user"],"reviewers":["default-reviewer"]}}}}"#,
+    )
+    .expect("write GitHub pull-request defaults");
+
+    let configured = fixture.run_pr(&["pr", "create", "--title", "Configured"], "");
+    assert_eq!(success_json(&configured)["number"], 42);
+    assert!(
+        gh_lines(&fixture).contains(
+            &"pr create --repo owner/repo --title Configured --body-file - --assignee default-user --reviewer default-reviewer"
+                .to_string()
+        ),
+        "actual gh calls: {:?}",
+        gh_lines(&fixture)
+    );
+
+    fs::remove_file(&fixture.log).expect("clear gh argument log");
+    let overridden = fixture.run_pr(
+        &[
+            "pr",
+            "create",
+            "--title",
+            "Overridden",
+            "--assignee",
+            "octocat",
+            "--reviewer",
+            "hubot",
+        ],
+        "",
+    );
+    assert_eq!(success_json(&overridden)["number"], 42);
+    let lines = gh_lines(&fixture);
+    assert!(
+        lines.contains(
+            &"pr create --repo owner/repo --title Overridden --body-file - --assignee octocat --reviewer hubot"
+                .to_string()
+        ),
+        "actual gh calls: {lines:?}"
+    );
+    assert!(!lines
+        .iter()
+        .any(|line| line.contains("default-user") || line.contains("default-reviewer")));
+}
+
+// RF-CFG.5: an explicit `--base` wins over the configured base while the other configured keys
+// still apply.
+#[test]
+fn rf_cfg_5_pr_create_explicit_base_overrides_configured_base() {
+    let fixture = Fixture::new();
+    fixture.init_git();
+    fs::write(
+        fixture.root.join(".workctl.json"),
+        r#"{"defaults":{"github":{"pr":{"base":"develop","labels":["bug"],"draft":true}}}}"#,
+    )
+    .expect("write GitHub pull-request defaults");
+
+    let created = fixture.run_pr(
+        &["pr", "create", "--title", "Explicit", "--base", "main"],
+        "",
+    );
+    assert_eq!(success_json(&created)["number"], 42);
+    let lines = gh_lines(&fixture);
+    assert!(
+        lines.contains(
+            &"pr create --repo owner/repo --title Explicit --body-file - --base main --draft --label bug"
+                .to_string()
+        ),
+        "actual gh calls: {lines:?}"
+    );
+    assert!(!lines.iter().any(|line| line.contains("develop")));
+}
+
+// RF-CFG.5: the create-only default keys never reach `pr merge`.
+#[test]
+fn rf_cfg_5_pr_create_defaults_do_not_affect_pr_merge() {
+    let fixture = Fixture::new();
+    fixture.init_git();
+    fs::write(
+        fixture.root.join(".workctl.json"),
+        r#"{"defaults":{"github":{"pr":{"labels":["bug"],"assignees":["default-user"],"reviewers":["default-reviewer"],"base":"develop","draft":true}}}}"#,
+    )
+    .expect("write GitHub pull-request defaults");
+
+    let merged = fixture.run_pr(&["pr", "merge", "42"], "");
+    assert_eq!(
+        success_json(&merged),
+        json!({"number":42,"method":null,"auto":false})
+    );
+    let lines = gh_lines(&fixture);
+    assert!(lines.contains(&"pr merge 42 --repo owner/repo".to_string()));
+    assert!(
+        !lines.iter().any(|line| line.contains("--label")
+            || line.contains("--assignee")
+            || line.contains("--reviewer")
+            || line.contains("--base")
+            || line.contains("--draft")),
+        "actual gh calls: {lines:?}"
+    );
+}
+
+// RF-PR.7, RF-PR.10: `--delete-branch` removes the remote head branch and never a local branch.
 #[test]
 fn delete_branch_removes_only_the_remote_ref() {
     let fixture = Fixture::new();
@@ -1424,4 +1559,30 @@ fn pr_comment_lock_and_revert_use_native_gh_commands() {
     assert_eq!(error_json(&invalid)["code"], "invalid_input");
     let invalid_lock = fixture.run_pr(&["pr", "lock", "42", "--reason", "unknown"], "");
     assert!(!invalid_lock.status.success());
+}
+
+// RF-CFG.8: `defaults.github.listLimit` supplies the pull-request listing limit until `--limit`
+// overrides it.
+#[test]
+fn rf_cfg_8_configured_list_limit_applies_to_pull_request_listings() {
+    let fixture = Fixture::new();
+    fixture.init_git();
+    fs::write(
+        fixture.root.join(".workctl.json"),
+        r#"{"defaults":{"github":{"listLimit":7}}}"#,
+    )
+    .expect("write list limit config");
+
+    assert_eq!(
+        success_json(&fixture.run_pr(&["pr", "list"], ""))
+            .as_array()
+            .expect("pull request list")
+            .len(),
+        3
+    );
+    success_json(&fixture.run_pr(&["pr", "list", "--limit", "3"], ""));
+
+    let log = fs::read_to_string(&fixture.log).expect("read gh arguments");
+    assert!(log.contains("--limit 7 --json"), "{log}");
+    assert!(log.contains("--limit 3 --json"), "{log}");
 }

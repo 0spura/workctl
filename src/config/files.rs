@@ -25,6 +25,52 @@ pub struct Config {
 #[serde(deny_unknown_fields)]
 pub struct Defaults {
     pub github: Option<GithubDefaults>,
+    pub gitlab: Option<GitlabDefaults>,
+    pub output: Option<OutputDefaults>,
+}
+
+/// Success output defaults shared by both providers.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OutputDefaults {
+    pub format: Option<OutputFormatSetting>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OutputFormatSetting {
+    Json,
+    Text,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitlabDefaults {
+    pub issue: Option<GitlabIssueDefaults>,
+    pub mr: Option<GitlabMrDefaults>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitlabIssueDefaults {
+    #[serde(default)]
+    pub labels: Vec<String>,
+    #[serde(default)]
+    pub assignees: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitlabMrDefaults {
+    #[serde(default)]
+    pub labels: Vec<String>,
+    #[serde(default)]
+    pub assignees: Vec<String>,
+    #[serde(default)]
+    pub reviewers: Vec<String>,
+    pub target_branch: Option<String>,
+    #[serde(default)]
+    pub draft: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -32,6 +78,8 @@ pub struct Defaults {
 pub struct GithubDefaults {
     pub issue: Option<GithubIssueDefaults>,
     pub pr: Option<GithubPrDefaults>,
+    /// Default `--limit` for GitHub issue and pull-request listings.
+    pub list_limit: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -48,6 +96,15 @@ pub struct GithubPrDefaults {
     pub merge_method: Option<GithubMergeMethod>,
     #[serde(default)]
     pub delete_branch: bool,
+    #[serde(default)]
+    pub labels: Vec<String>,
+    #[serde(default)]
+    pub assignees: Vec<String>,
+    #[serde(default)]
+    pub reviewers: Vec<String>,
+    pub base: Option<String>,
+    #[serde(default)]
+    pub draft: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -91,6 +148,60 @@ pub fn load(root: &Path) -> Result<Config, AppError> {
 }
 
 fn validate(config: &Config) -> Result<(), AppError> {
+    if let Some(github) = config.defaults.as_ref().and_then(|d| d.github.as_ref()) {
+        if let Some(limit) = github.list_limit {
+            if !(1..=1000).contains(&limit) {
+                return Err(AppError::config(
+                    "GitHub list limit must be between 1 and 1000",
+                ));
+            }
+        }
+        if let Some(pr) = github.pr.as_ref() {
+            if pr
+                .labels
+                .iter()
+                .any(|value| value.trim().is_empty() || value == "@auto")
+                || pr
+                    .assignees
+                    .iter()
+                    .chain(pr.reviewers.iter())
+                    .any(|value| value.trim().is_empty())
+                || pr
+                    .base
+                    .as_ref()
+                    .is_some_and(|base| base.trim().is_empty())
+            {
+                return Err(AppError::config(
+                    "GitHub pull-request defaults contain an invalid value",
+                ));
+            }
+        }
+    }
+    if let Some(gitlab) = config.defaults.as_ref().and_then(|d| d.gitlab.as_ref()) {
+        let invalid = |values: &[String]| {
+            values
+                .iter()
+                .any(|value| value.trim().is_empty() || value == "@auto")
+        };
+        let issue_invalid = gitlab
+            .issue
+            .as_ref()
+            .is_some_and(|issue| invalid(&issue.labels) || invalid(&issue.assignees));
+        let mr_invalid = gitlab.mr.as_ref().is_some_and(|mr| {
+            invalid(&mr.labels)
+                || invalid(&mr.assignees)
+                || invalid(&mr.reviewers)
+                || mr
+                    .target_branch
+                    .as_ref()
+                    .is_some_and(|branch| branch.trim().is_empty())
+        });
+        if issue_invalid || mr_invalid {
+            return Err(AppError::config(
+                "GitLab defaults contain an invalid value",
+            ));
+        }
+    }
     let Some(issue) = config
         .defaults
         .as_ref()
@@ -244,7 +355,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use super::{GithubMergeMethod, load};
+    use super::{GithubMergeMethod, OutputFormatSetting, load};
     use crate::config::Provider;
 
     static NEXT_DIR: AtomicUsize = AtomicUsize::new(0);
@@ -350,6 +461,83 @@ mod tests {
         )
         .expect("write unsupported merge method");
         assert_eq!(load(&root.0).unwrap_err().code, "config");
+    }
+
+    #[test]
+    fn gitlab_and_output_defaults_parse_typed_values() {
+        let root = TempRoot::new();
+        fs::write(
+            root.0.join(".workctl.json"),
+            r#"{"defaults":{"gitlab":{"issue":{"labels":["bug"],"assignees":["alice"]},
+"mr":{"labels":["backend"],"reviewers":["bob"],"targetBranch":"develop","draft":true}},
+"output":{"format":"text"}}}"#,
+        )
+        .expect("write GitLab and output defaults");
+
+        let config = load(&root.0).expect("load valid defaults");
+        let defaults = config.defaults.expect("defaults");
+        let gitlab = defaults.gitlab.expect("GitLab defaults");
+        let issue = gitlab.issue.expect("issue defaults");
+        assert_eq!(issue.labels, ["bug"]);
+        assert_eq!(issue.assignees, ["alice"]);
+        let mr = gitlab.mr.expect("merge-request defaults");
+        assert_eq!(mr.labels, ["backend"]);
+        assert_eq!(mr.reviewers, ["bob"]);
+        assert_eq!(mr.target_branch.as_deref(), Some("develop"));
+        assert!(mr.draft);
+        assert!(matches!(
+            defaults.output.expect("output defaults").format,
+            Some(OutputFormatSetting::Text)
+        ));
+    }
+
+    #[test]
+    fn github_pr_create_defaults_and_list_limit_parse_typed_values() {
+        let root = TempRoot::new();
+        fs::write(
+            root.0.join(".workctl.json"),
+            r#"{"defaults":{"github":{"pr":{"labels":["bug"],"assignees":["octocat"],
+"reviewers":["hubot"],"base":"develop","draft":true},"listLimit":50}}}"#,
+        )
+        .expect("write create defaults and list limit");
+
+        let config = load(&root.0).expect("load valid defaults");
+        let github = config.defaults.expect("defaults").github.expect("GitHub defaults");
+        assert_eq!(github.list_limit, Some(50));
+        let pr = github.pr.expect("pull-request defaults");
+        assert_eq!(pr.labels, ["bug"]);
+        assert_eq!(pr.assignees, ["octocat"]);
+        assert_eq!(pr.reviewers, ["hubot"]);
+        assert_eq!(pr.base.as_deref(), Some("develop"));
+        assert!(pr.draft);
+        assert!(pr.merge_method.is_none());
+        assert!(!pr.delete_branch);
+    }
+
+    #[test]
+    fn out_of_range_and_blank_new_defaults_fail_closed() {
+        let root = TempRoot::new();
+        for contents in [
+            r#"{"defaults":{"github":{"listLimit":0}}}"#,
+            r#"{"defaults":{"github":{"listLimit":1001}}}"#,
+            r#"{"defaults":{"github":{"pr":{"labels":[" "]}}}}"#,
+            r#"{"defaults":{"github":{"pr":{"labels":["@auto"]}}}}"#,
+            r#"{"defaults":{"github":{"pr":{"base":""}}}}"#,
+            r#"{"defaults":{"gitlab":{"issue":{"assignees":[" "]}}}}"#,
+            r#"{"defaults":{"gitlab":{"issue":{"labels":["@auto"]}}}}"#,
+            r#"{"defaults":{"gitlab":{"mr":{"reviewers":["@auto"]}}}}"#,
+            r#"{"defaults":{"gitlab":{"mr":{"targetBranch":" "}}}}"#,
+            r#"{"defaults":{"output":{"format":"yaml"}}}"#,
+            r#"{"defaults":{"output":{"style":"text"}}}"#,
+            r#"{"defaults":{"gitlab":{"mergeRequests":{}}}}"#,
+        ] {
+            fs::write(root.0.join(".workctl.json"), contents).expect("write invalid config");
+            assert_eq!(
+                load(&root.0).expect_err(contents).code,
+                "config",
+                "config accepted: {contents}"
+            );
+        }
     }
 
     #[test]

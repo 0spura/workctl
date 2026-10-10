@@ -42,5 +42,5 @@ pub(super) fn execute(globals: &GlobalArgs, args: PrArgs) -> Result<(), AppError
         PrAction::Revert(args) => revert::execute(globals, args)?,
         PrAction::UpdateBranch(args) => update_branch::execute(globals, args)?,
     };
-    output::write(globals.format, &output)
+    output::write(globals.resolved_format, &output)
 }
