@@ -12,6 +12,8 @@
 > GLiNER withdrawal decision: [ADR-0020](./adr/0020-remove-gliner-python-server.md), superseding the GLiNER2.5-Decide adapter and local Python service in [ADR-0014](./adr/0014-native-decision-model-adapters.md) and [ADR-0015](./adr/0015-provider-neutral-decision-model-package.md).
 > Command-verb decision: [ADR-0016](./adr/0016-gh-verb-parity.md), superseding the issue and pull request verb names in ADR-0004 and ADR-0006.
 > Grammar-selection decision: [ADR-0017](./adr/0017-provider-selected-cli-grammar.md), superseding ADR-0016's single-surface premise and `--provider` as a grammar selector.
+> Provider-selector removal and worktree-scoped autodetection: [ADR-0046](./adr/0046-remove-provider-selection-cli-flags.md), superseding provider-selection CLI and generic `provider` config fallback in ADR-0017.
+> Local target-worktree context via `--repo-path`: [ADR-0047](./adr/0047-local-target-worktree-repo-path.md), extending the worktree boundary in ADR-0046.
 > GitHub Project fields and issue defaults: [ADR-0018](./adr/0018-github-project-dynamic-fields.md), with automatic field selection added by [ADR-0019](./adr/0019-decision-model-project-field-selection.md).
 > GitHub issue relationship reads: [ADR-0023](./adr/0023-github-issue-view-relationships.md).
 > Read-only PR status evidence: [ADR-0028](./adr/0028-read-only-pr-status-evidence.md).
@@ -23,6 +25,8 @@
 > Issue and pull-request linkage decision: [ADR-0036](./adr/0036-issue-pr-branch-linking.md), superseding the create-only `--closes` decision in ADR-0006.
 > Configuration defaults decision: [ADR-0038](./adr/0038-configuration-defaults-expansion.md), extending the create/format/limit surface of [ADR-0029](./adr/0029-github-pr-merge-defaults.md) and [ADR-0018](./adr/0018-github-project-dynamic-fields.md).
 > Decision-model configuration: [ADR-0039](./adr/0039-decision-model-configuration.md), superseding the environment-only model selection and credentials of [ADR-0014](./adr/0014-native-decision-model-adapters.md) and [ADR-0015](./adr/0015-provider-neutral-decision-model-package.md).
+> `jev-latest` endpoint decision: [ADR-0045](./adr/0045-typesafe-jev-systemone-endpoint.md), superseding the Jev service endpoint in ADR-0014/0015.
+> GitLab work-time accounting: [ADR-0043](./adr/0043-gitlab-local-work-time-ledger.md), extending [ADR-0042](./adr/0042-event-driven-workflow-automation.md).
 
 `workctl` is a local Rust CLI. It manages GitHub issues and pull requests, and GitLab issues, by invoking the provider's official command-line tool. GitLab project URLs retain their instance host so `glab` can select the matching authenticated host. Each provider owns a static grammar selected before arguments are parsed; no MCP server ships.
 
@@ -126,7 +130,7 @@ src/
     label.rs                  candidate repository labels and normalized model scores
   decision_model/
     mod.rs                    provider-neutral DecisionModel contract and adapter selection
-    jev_adapter.rs            Jev native System One protocol
+    jev_adapter.rs            TypeSafe SystemOne transport for the Jev model
     laya_adapter.rs           Laya native System One protocol
     glide_adapter.rs          Fastino GLiDE native System One protocol
     llm_decision_adapter.rs   generic loopback OpenAI-compatible Chat Completions client
@@ -156,13 +160,17 @@ src/
       issues/
         mod.rs                GitLab issue composition and provider-native create/update requests
         read.rs               list/show
-        write.rs              create/update and safe post-write confirmation
+        develop.rs            linked-branch creation/listing through the GitLab branches API; IID-prefixed names
         mapping.rs            response validation, `iid`/`description`/`opened` normalization
   output/
     mod.rs
     json.rs                   explicit JSON success and structured error output
     text.rs                   default compact acknowledgements and read projections
     error.rs                  format-aware safe errors and partial-success recovery
+  events/
+    mod.rs                    mutation event construction and dispatch boundary
+    store.rs                  SQLite outbox and independent endpoint delivery state
+    dispatch.rs               bounded HTTPS delivery and retry eligibility
 
 tests/
   common/mod.rs               shared isolated `gh`/`glab` fixtures and CLI helpers
@@ -176,10 +184,10 @@ GitLab has its own grammar and adapter rather than extending the GitHub one. Git
 
 ## Command flow
 
-1. Code-host and work-item providers are selected independently before parsing. Domain-specific flags override legacy `--provider`; domain configuration overrides legacy `provider`; the Git origin is the final fallback. The root command tree combines the selected work-item provider's `issue` command and code-host provider's `pr` or `mr` command.
-2. Clap parses that composite grammar plus global `--provider`, `--code-provider`, `--work-item-provider`, `--repo`, and `--format`.
-3. Help/version exit without external dependencies. Grammar selection is best-effort and cannot fail; authoritative configuration validation and repository resolution run when a command executes.
-4. Repository resolution is scoped to the provider domain owning the command. The origin supplies a repository only when its host matches that provider; otherwise an explicit `--repo` is required. GitLab accepts an HTTPS project URL for a self-managed instance and retains its host; unsupported/unknown provider configuration fails closed.
+1. Code-host and work-item providers are selected independently before parsing. Matching `codeProvider`/`workItemProvider` settings in the selected target worktree override its Git origin host. The generic `provider` config key and all provider-selection CLI flags are removed; the root command tree combines the selected work-item provider's `issue` command and code-host provider's `pr` or `mr` command.
+2. Clap parses that composite grammar plus global `--repo-path`, `--repo`, and `--format`. If provider context is unknown, provider operations fail closed; provider-neutral help/version still work.
+3. With `--repo-path`, resolve a relative value from the caller's original working directory, require an existing directory inside a Git worktree, and canonicalize to its worktree root. Without it, use the current worktree root. Both config files, origin, and command execution context use the selected root; invalid explicit paths never fall back.
+4. Repository resolution is scoped to the provider domain owning the command. The target origin supplies a repository only when its host matches that provider; otherwise an explicit `--repo` is required. `--repo` changes remote resource scope only; it does not select a provider or fetch config remotely. GitLab accepts an HTTPS project URL for a self-managed instance and retains its host.
 5. The selected provider checks its own CLI is available and authenticated — `gh auth status --hostname github.com` or `glab auth status --hostname` with the selected GitLab project host — then calls its adapter.
 6. Issue creation invokes the provider-neutral `DecisionModel` when `@auto` is present, or when the applicable GitHub Project profile has an unclaimed field in `autoSelectFields`. It sends the proposed title/body and allowlisted candidate names/descriptions in one request; repository labels and eligible Project options share the request. The model boundary receives no provider credentials or unrelated metadata. Model configuration and response validation happen before issue creation. Issue edits retain the timestamp guard.
 7. The GitHub adapter invokes `gh issue list` and `gh pr list` for bounded summaries, passing filters through as fixed flags. Issue reads use `gh api`; issue create/edit use `gh issue create|edit`; pull requests use `gh pr` commands. On issue/PR create/edit and `pr edit`, shared GitHub code resolves an explicit `--milestone @current` selector by querying open milestones and choosing the nearest due date today or later; a tie or no eligible milestone fails before the write instead of guessing. An omitted selector makes no request and leaves the field unset, other values pass through verbatim, list filters stay literal, and omission on an edit or update preserves the remote value. Typed optional metadata flags are forwarded directly to `gh`. Create/edit bodies are passed over stdin rather than interpolated into a shell command.
@@ -187,7 +195,9 @@ GitLab has its own grammar and adapter rather than extending the GitHub one. Git
    GitHub issue editing plans only explicitly set/cleared fields against the in-scope Project schema. An explicit `NAME=@auto` resolves discovered single-select/iteration options and shares one model request per issue with automatic labels using final proposed text. A unique best score >= 0.8 plans a field write; low confidence and tied best options preserve the current field. Choices reset between batch targets. The issue revision is rechecked after classification, field-only edits skip the issue mutation, and requested fields are written serially without automatically adding membership. A failure after a completed write reports `partial_success`. Creation defaults and configured `autoSelectFields` are never reapplied during edit; Project field revisions are outside the issue guard.
    Native issue type and parent/sub-issue/blocking changes are provider-owned `NativeIssueEdit` metadata; they share one `gh issue edit` with the generic patch without widening the provider-neutral request. The obsolete generic issue-edit trait method is removed. The GitHub command validates canonical issue references and same-repository targets before provider access, then processes distinct targets serially. It reuses one Project schema plan and one label catalog per invocation; each target retains its own body resolution/model request and timestamp guard. Work scales with the explicit target count and, for Project edits, target count times requested field count; no relationship crawl or unbounded pagination is introduced. A later target failure returns batch `partial_success`; a failed readback after a completed native mutation reports that mutation separately.
 8. The GitLab adapter invokes `glab issue list`, `view`, `create`, and `update` with a full HTTPS project URL. The URL host is retained through resolution and passed to `glab auth status --hostname`, including for self-managed instances. Reads and post-write confirmation use `--output json`; create validates the emitted issue URL against the selected project and obtains the shared result with `issue view`. Native GitLab write fields remain typed on the GitLab adapter. Since `glab issue create/update` expose descriptions only as argument values, description bytes are sent through documented `glab api --input -` JSON-body mode, never argv. Empty update descriptions remain rejected before provider access. Since `glab issue create` omits `--weight=0`, an explicit zero is applied with a follow-up `glab issue update --weight=0`. The mapping turns `iid` into `number`, `description` into `body`, and `opened` into `open` without leaking provider-only schema.
+   GitLab `mr issues` reads `GET /projects/:id/merge_requests/:merge_request_iid/related_issues`; this lists issues referenced by MR content, not only issues closed on merge (`closes_issues`). The API may omit `references`, so text output falls back to `#IID`.
 9. Typed results carry mutation outcomes separately from their unchanged JSON resources. `output` emits compact text by default or explicit JSON. Errors use the selected format on stderr and a nonzero exit; partial-success text retains identities and completed/pending operations without resource dumps.
+10. For a confirmed mutating command, the command layer constructs one domain event per target and commits it to the local outbox. The dispatcher attempts opted-in endpoint deliveries before the CLI returns, under one aggregate one-second deadline. Reads and true no-ops do not emit mutation events. Delivery errors never rewrite the provider result; enqueue failures produce a safe warning.
 
 ## Proposed private semantic declarations
 
@@ -211,20 +221,67 @@ before implementation; no storage engine or new CLI flag is implied here.
 
 ## Configuration and context
 
-- Discover both config files at the Git worktree root on every command invocation, including when provider or repository flags override their values; never walk above the root.
-- Both files are strict JSON, regular non-symlink files capped at 64 KiB. Local `provider`, `codeProvider`, and `workItemProvider` replace matching shared fields independently; local `defaults` replaces shared defaults as a whole; `decisionModel` keys merge independently, because its credential is accepted only in the local file. Unknown keys and malformed files fail closed.
+- Resolve both config files from the selected target Git worktree root on every command invocation; never walk above the root. `--repo-path` selects a local target; without it, the caller's current worktree supplies context.
+- Both files are strict JSON, regular non-symlink files capped at 64 KiB. Local `codeProvider` and `workItemProvider` replace matching shared fields independently; the generic `provider` key is removed and rejected as unknown. Local `defaults` replaces shared defaults as a whole; `decisionModel` keys merge independently, because its credential is accepted only in the local file. Unknown keys and malformed files fail closed.
 - `defaults.github.issue` retains repository-specific issue settings and optional Project profile (`url`, exact `repositories`, string-valued `fields`). `labelCandidates` narrows labels passed to DecisionModel. `defaults.github.pr.mergeMethod` selects `merge|squash|rebase` when `pr merge --method` is omitted; explicit CLI method wins, and absence of both leaves method selection to `gh`.
 - `defaults.github.pr.deleteBranch` is a boolean defaulting to false. True enables remote branch deletion after every completed PR merge; `--delete-branch` can enable it for one invocation, but there is no inverse CLI option. Deletion is workctl's own `gh api` call on the pull request's head ref and never touches a local branch; an `--auto` invocation queues the merge and deletes nothing. Local defaults replace shared defaults as a whole.
 - `defaults.github.pr` also carries `labels`, `assignees`, `reviewers`, `base`, and boolean `draft` for `pr create`; `defaults.gitlab.issue` and `defaults.gitlab.mr` carry the equivalent GitLab create inputs, with `targetBranch` matching `glab`'s flag. Create commands merge them in the command layer before provider access, and `pr merge` never reads the create keys.
-- `defaults.output.format` (`json|text`) is resolved once before command dispatch: explicit `--format`, then configuration, then `text`. The selected format covers success and errors. Parse/configuration failures fall back to safe text unless a valid explicit JSON choice is available; help and version do not require configuration or provider access.
+- `defaults.output.format` (`json|text`) is resolved from the selected target: explicit `--format`, then configuration, then `text`. Parse errors use valid target configuration too; invalid target/configuration falls back to safe text unless explicit JSON is available. Help and version do not require configuration or provider access.
 - `defaults.github.listLimit` (1–1000) supplies the `issue list`/`pr list` `--limit` default; explicit `--limit` wins, then 30. GitLab listings keep their native `--per-page` semantics and are not covered by this key.
 - `decisionModel.model` selects `jev-latest`, `laya`, `fastino/GLiDE`, or `local/<model-id>`, and `decisionModel.baseUrl` configures the loopback-only local endpoint; nonblank `DECISION_MODEL` and `DECISION_MODEL_BASE_URL` variables override them. `decisionModel.apiKey` is accepted only in `.workctl.local.json`, and the `DECISION_MODEL_API_KEY` override wins over it. A shared-file key fails closed as a `config` error without echoing the credential, and the settings resolve only for an operation that opts into model classification.
 - Defaults never override an explicit flag: configured labels precede explicit ones with duplicates removed, explicit assignees/reviewers replace configured lists, and explicit branch/format/limit values win.
-- Provider precedence is independent per domain: domain-specific CLI flag, legacy `--provider`, domain-specific config, legacy config `provider`, then Git origin. Grammar selection reads these sources before parsing, best-effort and without external dependencies; authoritative command execution validates configuration.
-- Repository precedence: CLI `--repo [HOST/]OWNER[/...]/REPO` or, for GitLab, a full HTTPS project URL; otherwise use `origin` only when it belongs to the selected command's provider. A mismatching origin requires explicit `--repo`.
+- Provider precedence is independent per domain: `codeProvider`/`workItemProvider`, then the selected target worktree's Git origin. Grammar selection reads these sources before parsing, without external dependencies; authoritative command execution validates configuration. The generic `provider` fallback and provider selector flags are not accepted.
+- Repository precedence: `--repo [HOST/]OWNER[/...]/REPO` or, for GitLab, a full HTTPS project URL; otherwise use the selected target worktree's `origin` only when it belongs to the selected command's provider. A mismatching origin requires explicit `--repo`.
 - The repository is validated before inclusion in any provider argument or endpoint path: GitHub accepts exactly `OWNER/REPO`; GitLab accepts `GROUP[/SUBGROUP...]/PROJECT` or an HTTPS project URL on a self-managed instance. HTTPS and SCP-style SSH GitHub and known GitLab remotes are recognized; unknown hosts do not fall back.
-- If no Git root exists, an explicit provider and repository are required for provider operations. There is no persistent `repo` config pin.
+- Provider operations without a target Git worktree have no provider context and fail closed. `--repo` alone is not a provider selector; run from a target worktree or supply `--repo-path PATH`. Relative command file arguments are interpreted from the selected worktree when `--repo-path` is used.
 - Legacy `.mcp-tracker.json` files are neither read nor migrated.
+
+## Mutation outbox and local workflows
+
+The command/application layer produces one typed mutation receipt from confirmed provider results, never from stdout or human-readable acknowledgements. The receipt is the single source for both the local workflow consumer and outgoing CloudEvents. It preserves per-target batch results and confirmed partial progress; reads, no-ops, and failures before a write produce no receipt.
+
+GitHub URL issue edits resolve all targets to one repository before workflow preflight or provider access; the same identity scopes execution and receipts, including partial success. GitLab MR creation preserves an explicit `--related-issue` as a fully qualified reference in preflight and its receipt, so later merge workflows retain that association.
+
+CloudEvents 1.0 retain `source=urn:workctl:<provider>:<owner/repo>`, `type=workctl.<resource>.<action>`, and `subject=/<resource>/<id>`. Resource remains `issue` or `pull_request`; branch creation is represented as an issue-linked operation, and review submissions carry the submitted review outcome. Event data has a schema version, safe operation discriminator, outcome, and only explicitly supplied, fully qualified related issue references. Workflow-origin events add `origin=workflow` and `causation_id`; local matching excludes them to prevent recursion. Bodies, workflow comment text, credentials, and provider diagnostics are never serialized.
+
+Shared `.workctl.json` defines bounded, ordered rules for issue creation, linked-branch creation, pull-request creation, confirmed pull-request merge, and workctl-submitted approval. A merge rule runs only after `gh pr view` or `glab mr view` confirms the merged state; queuing auto-merge is an update, not a merge event. Successful `mr approve` emits the same `review_approved` operation as a submitted GitHub approval. Actions are typed: stage/Project-field changes, label membership, assignee membership, and comments. Provider-native validation remains in the existing adapters; unsupported action/provider combinations fail closed. Each PR may carry at most 32 explicit, fully qualified issue references; the workflow planner caps PR-trigger expansion at 16 actions and other triggers at 512. The outbox retains add/remove reference deltas in a bounded active-reference table so later merge and approval events can resolve the current explicit issue set; partial edit receipts retain deltas only when the PR edit is confirmed. GitHub repository/reference comparisons are case-insensitive. Free-form body text and branch names are never parsed to infer workflow targets.
+
+Local execution requires `workctl workflow approve` to store a fingerprint of the canonical shared workflow rules, repository scope, and GitHub Project destination profile in `.workctl.local.json`. The file must be untracked and Git-ignored. A changed fingerprint pauses local rules until reapproval; it does not disable HTTP delivery or block the underlying provider operation. Each persisted action is bound to both scope and approval fingerprint; claims, stale-action recovery, inspection, and resolution cannot cross repository scopes or execute under a changed approval. Status counts, action listing, and resolution use only the current approved fingerprint; listing/resolution fail closed when approval is absent or stale, including with `--format json`. The local consumer acts only during eligible workctl invocations; no daemon is added.
+
+`workflow.stageMappings.github` maps a stage name to a Project `field` and `value`; `workflow.stageMappings.gitlab` maps a stage name to a GitLab `label`. These provider-specific mappings are part of the approved workflow fingerprint. A stage with no mapping for the selected provider is invalid; do not infer a field, value, or label.
+
+
+The private platform workctl config directory still stores HTTP endpoint definitions at `config.json` under `events.endpoints`, keyed by ID; each endpoint has `url` and `token`. Tokens use Bearer over HTTPS. `.workctl.local.json` selects endpoint IDs, and shared `.workctl.json` cannot contain endpoint definitions or enable HTTP delivery. Global config remains capped at 64 KiB and 16 endpoints.
+
+On Unix, private config/state requires mode 0600. On Windows, config and state are under `%LOCALAPPDATA%\workctl`; both are restricted to local ACL-capable volumes and protected by DACLs granting only the current user, SYSTEM, and Builtin Administrators. Unsafe ACLs/reparse paths fail closed; this does not defend against hostile same-user, SYSTEM, or administrator processes.
+Windows approval-file creation uses exclusive creation with the private DACL already applied before credential-bearing bytes are written. Replacements preserve that protection without changing the repository directory's ACL.
+
+`store` persists the immutable event, selected endpoint-delivery rows, and materialized workflow-action rows in one short SQLite transaction before either consumer runs. Workflow-only use persists actions even with no endpoints. The database is local to the producer and never shared with Atlas. Completed local actions are not replayed; pending desired-state actions are reconciled before retry. A non-idempotent action whose write may have reached the provider becomes `uncertain` and is not automatically repeated; explicit inspection/resolution is required. Stored comment text remains private to the outbox.
+
+After enqueue, the command attempts local actions and endpoint delivery within one aggregate one-second deadline. A nonblocking local dispatch lock prevents concurrent executors from waiting on one another. Pending work becomes eligible on a later mutating invocation; no resident process is used. HTTP `2xx` completes only that endpoint. HTTP and local action failures remain independent and never change a confirmed provider mutation result. Retries of HTTP are at-least-once with stable event IDs; desired-state local actions reconcile, and completed actions are not repeated.
+
+Provider confirmation and SQLite enqueue cannot share a transaction. A crash after provider confirmation but before local enqueue can lose both the event and its planned workflow actions. An enqueue failure cannot roll back the provider mutation; preserve its result and report a concise safe warning. Never execute an unpersisted workflow action.
+
+### GitLab local work-time tracking
+
+An opt-in `workflow.workTracking` profile stores issue activity in the private SQLite state beside the event outbox. Invocation boundaries update a single attribution cursor keyed by approved repository scope, worktree, provider/project, branch, and explicit issue ID. Only intervals between workctl invocations plus the current invocation runtime are counted; idle gaps are capped at 10 minutes by default. Changes observed through workctl naturally replace the previous cursor, while unobserved Git operations remain outside the model.
+
+Configuration is repository-scoped in `.workctl.json` and still requires the normal local approval:
+
+```json
+{
+  "workflow": {
+    "workTracking": {
+      "logGitlabTimeSpent": true,
+      "idleTimeoutMinutes": 10
+    }
+  }
+}
+```
+
+`logGitlabTimeSpent` defaults to `false`; timeout range is 1–60 minutes. After changing the shared workflow, run `workctl workflow approve` from that repository. Explicit issue commands begin association; closing the issue submits accumulated time.
+
+For GitLab, issue close materializes one `LogTimeSpent` workflow action from the accumulated local milliseconds. The action calls GitLab's `POST /projects/:id/issues/:issue_iid/add_spent_time` through authenticated `glab api`, rounds down to whole minutes, and follows the existing durable queue's uncertain-write policy because time entries are additive. The ledger retains millisecond start/end timestamps and accumulated duration; no daemon or Git hook is installed.
 
 ## Provider seams and models
 
@@ -246,13 +303,14 @@ GitHub lifecycle actions are grouped in the public grammar: `issue edit`/`pr edi
 Branch deletion after a merge or close is a workctl-owned remote write, not a forwarded flag: the adapter reads the pull request's references with one `gh api repos/OWNER/REPO/pulls/NUMBER` call and, only when the head repository is the addressed repository, removes that ref with one `gh api --method DELETE repos/OWNER/REPO/git/refs/heads/BRANCH` call whose branch segment is percent-encoded. `gh` never receives `--delete-branch`, so no local branch is reachable from this path, and a 422 `Reference does not exist` counts as the deleted state rather than a failure. Deletion belongs to a merge that completed here, so an `--auto` invocation deletes nothing and rejects an explicit `--delete-branch`. A deletion failure after an acknowledged merge or close returns `partial_success` with `remote branch deletion` pending.
 
 
-`issue develop` is a GitHub-only operation reached through the GitHub issue grammar, not through `WorkItemProvider`, because no other provider has an equivalent verb: `GitHubIssues::develop_branch` and `linked_branches` forward to `gh issue develop`, which creates the branch on the remote and fetches it into the local remote-tracking refs. Workctl never creates or deletes a local branch itself and forwards `--checkout` only when the caller asks for it; the created branch name is read from the `/tree/` reference `gh` prints, and each `--list` line is a `BRANCH<TAB>URL` pair reduced to its branch name. Unparsable output fails as `provider_response`.
+`issue develop` is available for GitHub and GitLab through the selected work-item provider grammar, not through `WorkItemProvider`, because branch linking is provider-specific. GitHub's `GitHubIssues::develop_branch` and `linked_branches` forward to `gh issue develop`, which creates the remote branch and fetches it into local remote-tracking refs. GitLab creates a remote branch through the project branches API, prefixes supplied short lowercase hyphenated slugs with the issue IID, and lists branches with that IID prefix. Omitting `--name` keeps GitHub's native default and renders GitLab's project `issue_branch_template`. `--checkout` is opt-in; GitLab fetches the new branch and checks it out locally only when requested. Branch names in success results come from validated provider output.
+GitLab branch creation sends branch and base-ref values with `glab api --raw-field`; a leading `@` remains literal and cannot trigger glab's file-reading field syntax.
 
 Closing references are pull-request body text rather than a separate remote write, so `pr create --closes` and `pr edit --closes/--remove-closes` share `domain::body::ClosingReference` and the `apply_closing_references` policy. One keyword line per reference is appended when absent, and a removal drops only a line holding a single closing keyword and that one reference, leaving prose and multi-reference lines untouched. The resulting text travels in the same single `gh pr edit --body-file -` call as any other body change, so no extra invocation is made for linking.
 
 Requests cross the issue and pull-request seams as typed values, not loose strings. The `DecisionModel` package is provider-neutral: it receives work-item title/description and generic named candidates with optional descriptions, and returns validated `{candidate, probability}` scores (serialized as `label` for existing adapter wire compatibility). Its adapters are Jev, Laya, GLiDE, and generic local LLM; each keeps its own native HTTP contract behind the same interface. GitHub issue create/edit currently call it for repository-label selection; issue create also passes configured, dynamically discovered single-select/iteration Project options. The model package itself does not depend on GitHub response types.
 
-The adapter IDs are `jev-latest`, `laya`, `fastino/GLiDE`, or `local/<model-id>`, selected from `decisionModel.model` or the `DECISION_MODEL` override. Jev/Laya use native System One requests with Bearer authentication; GLiDE uses System One with `X-API-Key`. `LLMDecisionAdapter` uses OpenAI-compatible `/chat/completions` on loopback. Its generated numeric scores are model estimates, not calibrated probabilities; JSON mode constrains output shape only. Native model probabilities/confidence remain provider-native and need not be calibrated identically.
+The adapter IDs are `jev-latest`, `laya`, `fastino/GLiDE`, or `local/<model-id>`, selected from `decisionModel.model` or the `DECISION_MODEL` override. `jev-latest` uses TypeSafe's SystemOne endpoint with Bearer authentication; Laya uses its native SystemOne endpoint with Bearer authentication; GLiDE uses SystemOne with `X-API-Key`. `LLMDecisionAdapter` uses OpenAI-compatible `/chat/completions` on loopback. Its generated numeric scores are model estimates, not calibrated probabilities; JSON mode constrains output shape only. Native model probabilities/confidence remain provider-native and need not be calibrated identically.
 
 The generic local endpoint accepts any model served with OpenAI-compatible Chat Completions and JSON-object output. It is not a hosted OpenAI integration. `decisionModel.baseUrl` (or the `DECISION_MODEL_BASE_URL` override) is restricted to loopback; hosted endpoints are fixed. Requests are bounded to 2 MiB, responses to 1 MiB, redirects are disabled, and failed/malformed scores fail closed. The existing threshold is >= 0.8; it is preserved for compatibility, not as a claim of cross-model calibration.
 
@@ -298,8 +356,8 @@ Text output escapes terminal control characters in provider strings while preser
 | A verb or flag belonging to the other provider's grammar | clap usage error, exit 2, no provider call | Read the resolved provider's help (`workctl issue --help`) |
 | Attachments requested with `gh` older than 2.99.0 or an unparseable version | `dependency_version` JSON error before attachment write | Update `gh` through the user's package manager, or omit `--attach` |
 | Create with attachments exits nonzero | `attachment_create_uncertain`; the item may exist | Check GitHub before retrying |
-| Git remote missing, unsupported, or belonging to another provider than the selected one | `context`/`provider_unsupported` JSON error; no provider call | Pass explicit `--provider` and `--repo` for the intended host |
-| Invalid, oversized, linked, or non-regular config | `config` JSON error without path contents; overrides do not bypass validation | Correct/remove invalid config |
+| Git remote missing or unsupported | `context`/`provider_unsupported` JSON error; no provider call | Run from the target project's Git worktree or select one with `--repo-path PATH`; use `--repo` only to override remote scope |
+| Invalid, oversized, linked, or non-regular config | `config` JSON error without path contents; overrides do not bypass validation | Correct/remove invalid config; remove obsolete generic `provider` keys |
 | Invalid arguments or a non-positive number | `invalid_input` or a clap usage error; no remote call | Correct arguments |
 | `--milestone @current` with no eligible open milestone, or tied nearest due dates | `invalid_input` JSON error; no write | Pass an explicit `--milestone NAME` |
 | Body-change flags combined or incomplete | `invalid_input` JSON error; no `gh` call | Supply one body change and its companion argument |

@@ -1,7 +1,8 @@
 mod github;
 mod gitlab;
-mod labels;
-mod support;
+pub(crate) mod labels;
+pub(crate) mod support;
+mod workflow;
 
 pub(crate) use support::resolve_output_format;
 
@@ -12,5 +13,6 @@ pub fn execute(globals: GlobalArgs, command: ActiveCommand) -> Result<(), AppErr
     match command {
         ActiveCommand::Github(command) => github::execute(&globals, command),
         ActiveCommand::Gitlab(command) => gitlab::execute(&globals, command),
+        ActiveCommand::Workflow(action) => workflow::execute(globals.resolved_format, action),
     }
 }

@@ -79,7 +79,12 @@ pub(super) fn create(
                 }),
                 &completed,
                 &pending,
-            ));
+            )
+            .with_partial_event(crate::domain::PartialEvent {
+                resource: "issue",
+                number,
+                operation: "created",
+            }));
         }
         completed.push("project membership".to_owned());
         let mut applied = Vec::with_capacity(plan.assignments.len());
@@ -95,7 +100,12 @@ pub(super) fn create(
                 }),
                 &completed,
                 &pending,
-            ));
+            )
+            .with_partial_event(crate::domain::PartialEvent {
+                resource: "issue",
+                number,
+                operation: "created",
+            }));
         }
         completed.extend(applied);
         return read::show(provider, number).map_err(|_| {
@@ -109,6 +119,11 @@ pub(super) fn create(
                 &completed,
                 &["issue readback".to_owned()],
             )
+            .with_partial_event(crate::domain::PartialEvent {
+                resource: "issue",
+                number,
+                operation: "created",
+            })
         });
     }
     read::show(provider, number)

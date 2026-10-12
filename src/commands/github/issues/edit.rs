@@ -10,7 +10,32 @@ use crate::commands::support;
 use super::shared::filter_label_catalog;
 use crate::commands::labels::{AUTO_LABEL_THRESHOLD, automatic_label_names};
 
-pub(super) fn execute(globals: &GlobalArgs, args: EditArgs) -> Result<SuccessOutput, AppError> {
+pub(super) fn resolve_repository(
+    globals: &GlobalArgs,
+    args: &EditArgs,
+) -> Result<String, AppError> {
+    let url_repo = args
+        .targets
+        .iter()
+        .find_map(|target| target.repo.as_deref());
+    let repo = support::resolve_repo(
+        globals.work_item_provider,
+        globals.repo.as_deref().or(url_repo),
+    )?;
+    if args.targets.iter().any(|target| {
+        target
+            .repo
+            .as_ref()
+            .is_some_and(|value| !value.eq_ignore_ascii_case(&repo))
+    }) {
+        return Err(AppError::invalid_input(
+            "all edit targets must belong to the selected repository",
+        ));
+    }
+    Ok(repo)
+}
+
+pub(super) fn execute(args: EditArgs, repo: String) -> Result<SuccessOutput, AppError> {
     if args.comment.is_some() && args.state.is_none() {
         return Err(AppError::invalid_input("--comment requires --state"));
     }
@@ -21,28 +46,8 @@ pub(super) fn execute(globals: &GlobalArgs, args: EditArgs) -> Result<SuccessOut
             "--reason and --duplicate-of require --state closed",
         ));
     }
-    let url_repo = args
-        .targets
-        .iter()
-        .find_map(|target| target.repo.as_deref());
-    let provider_hint = globals
-        .work_item_provider
-        .or_else(|| url_repo.map(|_| crate::config::Provider::Github));
-    let repo = support::resolve_repo(
-        provider_hint.or(globals.work_item_provider),
-        globals.repo.as_deref().or(url_repo),
-    )?;
     let mut numbers = Vec::with_capacity(args.targets.len());
     for target in &args.targets {
-        if target
-            .repo
-            .as_ref()
-            .is_some_and(|value| !value.eq_ignore_ascii_case(&repo))
-        {
-            return Err(AppError::invalid_input(
-                "all edit targets must belong to the selected repository",
-            ));
-        }
         if !numbers.contains(&target.number) {
             numbers.push(target.number);
         }

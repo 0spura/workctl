@@ -177,6 +177,26 @@ fn write_to(stdout: &mut impl Write, output: &SuccessOutput) -> Result<(), AppEr
             writeln!(stdout).map_err(|_| AppError::output())?;
         }
         SuccessOutput::GitLabData(data) => write_gitlab_data(stdout, data)?,
+        SuccessOutput::WorkflowStatus { status, actions } => {
+            write!(stdout, "workflow {status}").map_err(|_| AppError::output())?;
+            for (state, count) in actions {
+                write!(stdout, " {state}={count}").map_err(|_| AppError::output())?;
+            }
+            writeln!(stdout).map_err(|_| AppError::output())?;
+        }
+        SuccessOutput::WorkflowActions(actions) => {
+            for action in actions {
+                writeln!(
+                    stdout,
+                    "workflow action {} {} {}#{}",
+                    action.id, action.state, action.target_resource, action.target_id
+                )
+                .map_err(|_| AppError::output())?;
+            }
+        }
+        SuccessOutput::WorkflowResolution { id, state } => {
+            writeln!(stdout, "workflow action {id} {state}").map_err(|_| AppError::output())?;
+        }
     }
     Ok(())
 }
@@ -425,11 +445,15 @@ fn write_gitlab_data(
             "issues" => {
                 let issue = item.get("issue").unwrap_or(item);
                 write!(stdout, "!{} issue ", data.number).map_err(|_| AppError::output())?;
-                let reference = issue
+                if let Some(reference) = issue
                     .pointer("/references/full")
                     .and_then(serde_json::Value::as_str)
-                    .ok_or_else(AppError::provider_response)?;
-                write_safe(stdout, reference, false)?;
+                {
+                    write_safe(stdout, reference, false)?;
+                } else {
+                    write!(stdout, "#").map_err(|_| AppError::output())?;
+                    write_json_id(stdout, issue.get("iid").or_else(|| issue.get("id")))?;
+                }
                 write!(stdout, " ").map_err(|_| AppError::output())?;
                 let title = issue
                     .get("title")

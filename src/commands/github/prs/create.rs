@@ -37,6 +37,7 @@ pub(super) fn execute(globals: &GlobalArgs, args: CreateArgs) -> Result<SuccessO
             labels.push(label.clone());
         }
     }
+    let related_issue_references = args.closes.clone();
     let provider = shared::provider(globals)?;
     let pull_request = provider.create(&NewPr {
         title: args.title,
@@ -58,6 +59,8 @@ pub(super) fn execute(globals: &GlobalArgs, args: CreateArgs) -> Result<SuccessO
             action: crate::output::MutationAction::Created,
             unchanged: false,
             gitlab: false,
+            related_issue_references,
+            removed_related_issue_references: Vec::new(),
         },
     ))
 }

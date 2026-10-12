@@ -293,8 +293,13 @@ fn checks_watch_preserves_failed_reports_and_bounds_wait_time() {
     assert_eq!(checks.as_array().expect("check report").len(), 2);
     assert_eq!(checks[1]["name"], "lint");
     assert_eq!(checks[1]["bucket"], "fail");
-    assert!(gh_lines(&fixture).contains(
-        &"pr checks 42 --repo owner/repo --required --watch --interval 4 --fail-fast --json name,state,bucket,description,link,workflow".to_string()
+    let calls = gh_lines(&fixture);
+    assert!(calls.contains(
+        &"pr checks 42 --repo owner/repo --required --watch --interval 4 --fail-fast".to_string()
+    ));
+    assert!(calls.contains(
+        &"pr checks 42 --repo owner/repo --required --json name,state,bucket,description,link,workflow"
+            .to_string()
     ));
     let pending = fixture.run_pr_json(
         &["pr", "checks", "42", "--watch", "--watch-timeout", "3"],

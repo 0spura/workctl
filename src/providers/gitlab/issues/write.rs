@@ -146,9 +146,13 @@ fn push_values(args: &mut Vec<String>, flag: &str, values: &[String]) {
 fn created_issue_number(provider: &GitLabIssues, output: &[u8]) -> Result<u64, AppError> {
     let output = std::str::from_utf8(output).map_err(|_| AppError::gitlab_write_uncertain())?;
     let url = output.trim();
-    let prefix = format!("{}/-/issues/", provider.repo_argument());
+    let prefix = provider.repo_argument();
     let number = url
         .strip_prefix(&prefix)
+        .and_then(|path| {
+            path.strip_prefix("/-/issues/")
+                .or_else(|| path.strip_prefix("/-/work_items/"))
+        })
         .filter(|suffix| !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit()))
         .and_then(|suffix| suffix.parse::<u64>().ok())
         .filter(|number| *number > 0)

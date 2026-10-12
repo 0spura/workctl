@@ -161,18 +161,31 @@ impl GitLabMergeRequests {
                 "unsupported GitLab merge request query",
             ));
         }
-        let args = [
-            "mr".to_owned(),
-            operation.to_owned(),
-            number.to_string(),
-            "--repo".to_owned(),
-            self.repo_url.clone(),
-            "--output".to_owned(),
-            "json".to_owned(),
-        ];
+        let args = if operation == "issues" {
+            vec![
+                "api".to_owned(),
+                "--hostname".to_owned(),
+                self.host.clone(),
+                format!(
+                    "projects/{}/merge_requests/{number}/related_issues",
+                    self.project_api_path()?
+                ),
+            ]
+        } else {
+            vec![
+                "mr".to_owned(),
+                operation.to_owned(),
+                number.to_string(),
+                "--repo".to_owned(),
+                self.repo_url.clone(),
+                "--output".to_owned(),
+                "json".to_owned(),
+            ]
+        };
         let output = super::run_glab(&args)?;
         let value: Value =
             serde_json::from_slice(&output).map_err(|_| AppError::provider_response())?;
+        let value = normalize_related_data(operation, value)?;
         validate_related_data(operation, &value)?;
         Ok(value)
     }
@@ -257,8 +270,8 @@ impl GitLabMergeRequests {
             "mr".to_owned(),
             "note".to_owned(),
             operation.to_owned(),
-            discussion_id.to_owned(),
             number.to_string(),
+            discussion_id.to_owned(),
             "--repo".to_owned(),
             self.repo_url.clone(),
         ];
@@ -286,6 +299,8 @@ impl GitLabMergeRequests {
             format!("projects/{project}/merge_requests/{number}"),
             "--hostname".to_owned(),
             self.host.clone(),
+            "--header".to_owned(),
+            "Content-Type: application/json".to_owned(),
             "--input".to_owned(),
             "-".to_owned(),
         ];
@@ -304,6 +319,33 @@ impl GitLabMergeRequests {
             .ok_or_else(|| AppError::invalid_input("GitLab repository URL is invalid"))?;
         Ok(path.trim_end_matches(".git").replace('/', "%2F"))
     }
+}
+
+fn normalize_related_data(operation: &str, value: Value) -> Result<Value, AppError> {
+    if operation != "approvers" || !value.is_object() {
+        return Ok(value);
+    }
+    if value
+        .get("approval_rules_overwritten")
+        .and_then(Value::as_bool)
+        .is_none()
+    {
+        return Err(AppError::provider_response());
+    }
+    let rules = value
+        .get("rules")
+        .and_then(Value::as_array)
+        .ok_or_else(AppError::provider_response)?;
+    let mut approvers = Vec::new();
+    for rule in rules {
+        let users = rule
+            .get("eligible_approvers")
+            .or_else(|| rule.get("approvers"))
+            .and_then(Value::as_array)
+            .ok_or_else(AppError::provider_response)?;
+        approvers.extend(users.iter().cloned());
+    }
+    Ok(Value::Array(approvers))
 }
 
 fn validate_related_data(operation: &str, value: &Value) -> Result<(), AppError> {
@@ -326,10 +368,6 @@ fn validate_related_data(operation: &str, value: &Value) -> Result<(), AppError>
                         .get("title")
                         .and_then(Value::as_str)
                         .is_some_and(|title| !title.trim().is_empty())
-                    && issue
-                        .pointer("/references/full")
-                        .and_then(Value::as_str)
-                        .is_some_and(|reference| !reference.trim().is_empty())
             }
             _ => false,
         };
@@ -467,4 +505,48 @@ fn string_list(value: Option<&Value>) -> Result<Vec<String>, AppError> {
                 .ok_or_else(AppError::provider_response)
         })
         .collect()
+}
+#[cfg(test)]
+mod tests {
+    use super::{normalize_related_data, validate_related_data};
+    use serde_json::json;
+
+    #[test]
+    fn gitlab_approver_rules_normalize_eligible_users() {
+        let value = json!({
+            "approval_rules_overwritten": false,
+            "rules": [{
+                "name": "Maintainers",
+                "eligible_approvers": [{
+                    "id": 101,
+                    "username": "reviewer",
+                    "name": "Reviewer"
+                }]
+            }]
+        });
+
+        let normalized = normalize_related_data("approvers", value).unwrap();
+        assert_eq!(
+            normalized,
+            json!([{
+                "id": 101,
+                "username": "reviewer",
+                "name": "Reviewer"
+            }])
+        );
+        validate_related_data("approvers", &normalized).unwrap();
+    }
+
+    #[test]
+    fn gitlab_approver_rules_without_eligible_users_return_empty_list() {
+        let value = json!({
+            "approval_rules_overwritten": false,
+            "rules": []
+        });
+
+        assert_eq!(
+            normalize_related_data("approvers", value).unwrap(),
+            json!([])
+        );
+    }
 }

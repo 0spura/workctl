@@ -21,6 +21,76 @@ fn gh_lines(fixture: &Fixture) -> Vec<String> {
         .collect()
 }
 
+/// RF-CLI.1: a URL or remote scope cannot supply an unresolved command-domain provider.
+#[test]
+fn unresolved_provider_rejects_url_edits_before_native_access() {
+    let outside = Fixture::new();
+    let output = outside.run_raw(
+        &[
+            "issue",
+            "edit",
+            "https://github.com/owner/repo/issues/7",
+            "--title",
+            "Updated",
+            "--format",
+            "json",
+        ],
+        "",
+    );
+    assert_eq!(error_json(&output)["code"], "context");
+    assert!(!outside.log.exists());
+    assert!(outside.glab_invocations().is_empty());
+    assert!(
+        outside
+            .run_raw(&["issue", "edit", "--help"], "")
+            .status
+            .success()
+    );
+
+    let caller = Fixture::new();
+    caller.init_git();
+    fs::write(
+        caller.root.join(".workctl.json"),
+        r#"{"codeProvider":"github","workItemProvider":"github"}"#,
+    )
+    .expect("write caller provider config");
+    let target = Fixture::new();
+    target.init_git();
+    let target_path = target.root.to_str().expect("fixture path is UTF-8");
+    for (config, group, reference) in [
+        (
+            r#"{"codeProvider":"github","defaults":{"output":{"format":"json"}}}"#,
+            "issue",
+            "https://github.com/owner/repo/issues/7",
+        ),
+        (
+            r#"{"workItemProvider":"github","defaults":{"output":{"format":"json"}}}"#,
+            "pr",
+            "42",
+        ),
+    ] {
+        fs::write(target.root.join(".workctl.json"), config)
+            .expect("write unresolved target provider config");
+        let output = caller.run_raw(
+            &[
+                "--repo-path",
+                target_path,
+                "--repo",
+                "owner/repo",
+                group,
+                "edit",
+                reference,
+                "--title",
+                "Updated",
+            ],
+            "",
+        );
+        assert_eq!(error_json(&output)["code"], "context");
+        assert!(!caller.log.exists());
+        assert!(caller.glab_invocations().is_empty());
+    }
+}
+
 #[test]
 fn create_list_view_and_edit_preserve_the_cli_contract() {
     let fixture = Fixture::new();
@@ -418,22 +488,14 @@ fn invalid_inputs_and_unsupported_provider_fail_before_gh() {
     }
     assert!(!fixture.log.exists());
 
-    // GitLab is a supported provider, so the grammar — not a runtime check — has to reject the
-    // other provider's verbs, before any provider command runs.
-    let wrong_grammar = fixture.run_json(
-        &[
-            "--provider",
-            "gitlab",
-            "--repo",
-            "owner/repo",
-            "issue",
-            "edit",
-            "1",
-            "--format",
-            "json",
-        ],
-        "",
-    );
+    // GitLab-only command groups must fail under the GitHub grammar inferred from this checkout.
+    fixture.init_git();
+    fs::write(
+        fixture.root.join(".workctl.json"),
+        r#"{"codeProvider":"github","workItemProvider":"github"}"#,
+    )
+    .expect("write GitHub provider config");
+    let wrong_grammar = fixture.run_raw(&["mr", "list", "--format", "json"], "");
     assert_eq!(error_json(&wrong_grammar)["code"], "invalid_input");
     assert!(!fixture.log.exists());
 
@@ -2030,26 +2092,26 @@ fn develop_creates_and_lists_linked_branches() {
     );
     let created = success_json(&created);
     assert_eq!(created["number"], 7);
-    assert_eq!(created["branch"], "feature-x");
+    assert_eq!(created["branch"], "7-feature-x");
 
     let listed = fixture.run_issue_json(&["issue", "develop", "7", "--list"], "");
     let listed = success_json(&listed);
     assert_eq!(listed["number"], 7);
-    assert_eq!(listed["branches"][0], "feature-x");
-    assert_eq!(listed["branches"][1], "feature-y");
+    assert_eq!(listed["branches"][0], "7-feature-x");
+    assert_eq!(listed["branches"][1], "7-feature-y");
 
     let text = fixture.run_issue(&["issue", "develop", "7", "--list", "--format", "text"], "");
     assert!(text.status.success());
     let text = String::from_utf8_lossy(&text.stdout);
     assert_eq!(
         text.lines().skip(1).collect::<Vec<_>>(),
-        ["feature-x", "feature-y"]
+        ["7-feature-x", "7-feature-y"]
     );
 
     let lines = gh_lines(&fixture);
     assert!(
         lines.contains(
-            &"issue develop 7 --repo owner/repo --base main --name feature-x --checkout"
+            &"issue develop 7 --repo owner/repo --base main --name 7-feature-x --checkout"
                 .to_string()
         ),
         "actual gh calls: {lines:?}"
@@ -2068,6 +2130,15 @@ fn develop_creates_and_lists_linked_branches() {
         "",
     );
     assert_eq!(conflicting.status.code(), Some(2));
+}
+
+// RF-WI.13: malformed branch slugs fail before provider authentication or writes.
+#[test]
+fn develop_rejects_invalid_branch_slug_before_provider_access() {
+    let fixture = Fixture::new();
+    let output = fixture.run_issue_json(&["issue", "develop", "7", "--name", "Auth/session"], "");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(!fixture.log.exists());
 }
 
 // RF-WI.13: output that carries no branch reference is a provider error, not an invented name.

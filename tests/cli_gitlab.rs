@@ -4,6 +4,7 @@
 mod common;
 
 use common::{Fixture, error_json, success_json};
+use std::fs;
 use std::io::{BufRead, Read, Write};
 use std::net::TcpListener;
 use std::thread;
@@ -155,6 +156,104 @@ fn gitlab_view_maps_the_description_onto_the_body() {
     assert_eq!(issue["created_at"], "2026-01-02T03:04:05.000Z");
 }
 
+/// RF-WI.13: a supplied slug gets the issue IID prefix and creates a remote GitLab branch.
+#[test]
+fn gitlab_issue_develop_prefixes_slug_and_lists_iid_branches() {
+    let fixture = Fixture::new();
+    let created = fixture.run_gitlab_json(
+        &[
+            "issue",
+            "develop",
+            "12",
+            "--name",
+            "auth-session-expiry",
+            "--base",
+            "main",
+        ],
+        "",
+    );
+    assert_eq!(success_json(&created)["branch"], "12-auth-session-expiry");
+    assert_eq!(
+        fixture.glab_invocations(),
+        vec![
+            "auth status --hostname gitlab.com".to_owned(),
+            format!("issue view --output json --repo {PROJECT} 12"),
+            "api --hostname gitlab.com --method POST projects/group%2Fsub%2Fproject/repository/branches --raw-field branch=12-auth-session-expiry --raw-field ref=main".to_owned(),
+        ]
+    );
+
+    let listed = fixture.run_gitlab_json(&["issue", "develop", "12", "--list"], "develop-list");
+    assert_eq!(
+        success_json(&listed)["branches"],
+        serde_json::json!(["12-auth-session-expiry", "12-second-fix"])
+    );
+    assert!(
+        fixture
+            .glab_invocations()
+            .last()
+            .unwrap()
+            .contains("--field search=12- --field per_page=100 --paginate")
+    );
+}
+
+/// RF-WI.13: omitting the slug follows GitLab's configured issue branch template.
+#[test]
+fn gitlab_issue_develop_uses_project_default_branch_template() {
+    let fixture = Fixture::new();
+    let created = fixture.run_gitlab_json(&["issue", "develop", "12"], "");
+    assert_eq!(success_json(&created)["branch"], "12-crash-on-startup");
+    let invocations = fixture.glab_invocations();
+    assert!(
+        invocations
+            .contains(&"api --hostname gitlab.com projects/group%2Fsub%2Fproject".to_owned())
+    );
+    assert!(
+        invocations
+            .last()
+            .unwrap()
+            .contains("branch=12-crash-on-startup --raw-field ref=main")
+    );
+}
+
+/// RF-WI.13: malformed slugs fail before provider access; remote failures never report success.
+#[test]
+fn gitlab_issue_develop_rejects_bad_slug_and_handles_write_failure() {
+    let fixture = Fixture::new();
+    let invalid =
+        fixture.run_gitlab_json(&["issue", "develop", "12", "--name", "Auth/session"], "");
+    assert_eq!(invalid.status.code(), Some(2));
+    assert!(fixture.glab_invocations().is_empty());
+
+    let failed = fixture.run_gitlab_json(
+        &["issue", "develop", "12", "--name", "auth-session-expiry"],
+        "develop-api-failure",
+    );
+    assert_eq!(error_json(&failed)["code"], "gitlab_write_uncertain");
+    assert!(failed.stdout.is_empty());
+}
+
+/// RF-WI.13: checkout is opt-in and requires a matching local GitLab worktree before the write.
+#[test]
+fn gitlab_issue_develop_checkout_preflights_the_local_remote() {
+    let fixture = Fixture::new();
+    let output = fixture.run_gitlab_json(
+        &[
+            "issue",
+            "develop",
+            "12",
+            "--name",
+            "auth-session-expiry",
+            "--checkout",
+        ],
+        "",
+    );
+    assert_eq!(error_json(&output)["code"], "invalid_input");
+    assert_eq!(
+        fixture.glab_invocations(),
+        ["auth status --hostname gitlab.com"]
+    );
+}
+
 #[test]
 fn gitlab_view_text_omits_provider_metadata_dump() {
     let fixture = Fixture::new();
@@ -226,7 +325,7 @@ fn gitlab_issue_note_sends_message_on_stdin() {
         fixture.glab_invocations(),
         vec![
             "auth status --hostname gitlab.com".to_owned(),
-            "api --method POST projects/group%2Fsub%2Fproject/issues/12/notes --hostname gitlab.com --input -"
+            "api --method POST projects/group%2Fsub%2Fproject/issues/12/notes --hostname gitlab.com --header Content-Type: application/json --input -"
                 .to_owned(),
         ]
     );
@@ -348,7 +447,7 @@ fn rf_gl_4_gitlab_create_uses_native_flags_and_stdin_description() {
                  --link-type=relates_to --linked-mr=6 --time-estimate=1h --time-spent=30m \
                  --template=bug"
             ),
-            "api --method PUT projects/group%2Fsub%2Fproject/issues/21 --hostname gitlab.com --input -"
+            "api --method PUT projects/group%2Fsub%2Fproject/issues/21 --hostname gitlab.com --header Content-Type: application/json --input -"
                 .to_owned(),
             format!("issue update 21 --repo {PROJECT} --weight=0"),
             format!("issue view --output json --repo {PROJECT} 21"),
@@ -406,7 +505,7 @@ fn rf_gl_5_gitlab_update_uses_native_flags_and_reads_back_the_issue() {
                  --label=ready --unlabel=triage --assignee=+alice --assignee=-bob --milestone= \
                  --public --weight=0 --due-date=2026-02-28"
             ),
-            "api --method PUT projects/group%2Fsub%2Fproject/issues/12 --hostname gitlab.com --input -"
+            "api --method PUT projects/group%2Fsub%2Fproject/issues/12 --hostname gitlab.com --header Content-Type: application/json --input -"
                 .to_owned(),
             format!("issue view --output json --repo {PROJECT} 12"),
         ]
@@ -485,7 +584,7 @@ fn gitlab_description_dash_is_data_not_an_editor_request() {
         fixture
             .glab_invocations()
             .iter()
-            .any(|invocation| invocation == "api --method PUT projects/group%2Fsub%2Fproject/issues/21 --hostname gitlab.com --input -")
+            .any(|invocation| invocation == "api --method PUT projects/group%2Fsub%2Fproject/issues/21 --hostname gitlab.com --header Content-Type: application/json --input -")
     );
 }
 
@@ -550,6 +649,33 @@ fn gitlab_write_uncertainty_hides_diagnostics_and_rejects_untrusted_create_url()
     );
     assert_eq!(error_json(&bad_url)["code"], "gitlab_write_uncertain");
     assert_eq!(fixture.glab_invocations().len(), 2);
+}
+#[test]
+fn gitlab_issue_create_accepts_current_work_item_url() {
+    let fixture = Fixture::new();
+    let description = fixture.root.join("description.txt");
+    std::fs::write(&description, "create").expect("write description fixture");
+    let description_path = description.to_str().expect("UTF-8 fixture path");
+    let output = fixture.run_gitlab_json(
+        &[
+            "issue",
+            "create",
+            "--title",
+            "New",
+            "--description-file",
+            description_path,
+        ],
+        "work-items-create-url",
+    );
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let issue = success_json(&output);
+    assert_eq!(issue["number"], 21);
+    assert_eq!(issue["body"], "Created description");
 }
 
 #[test]
@@ -769,7 +895,7 @@ fn rf_cfg_6_gitlab_issue_create_merges_configured_defaults_with_explicit_labels(
                 "issue create --repo {PROJECT} --title=Defaults --description= --yes \
                  --label=bug --label=triage --label=docs --assignee=default-user"
             ),
-            "api --method PUT projects/group%2Fsub%2Fproject/issues/21 --hostname gitlab.com --input -"
+            "api --method PUT projects/group%2Fsub%2Fproject/issues/21 --hostname gitlab.com --header Content-Type: application/json --input -"
                 .to_owned(),
             format!("issue view --output json --repo {PROJECT} 21"),
         ]
@@ -855,20 +981,28 @@ fn local_model(response: &'static str) -> (String, thread::JoinHandle<serde_json
     });
     (format!("http://{address}/v1"), handle)
 }
-/// RF-CLI.1: root help documents provider selection and describes each provider's groups.
+/// RF-CLI.1: root help reflects the current worktree provider configuration; provider selectors are removed.
 #[test]
-fn root_help_documents_resolution_order_and_provider_groups() {
+fn root_help_uses_worktree_provider_config_and_rejects_removed_selectors() {
     let fixture = Fixture::new();
+    fixture.init_git();
+    fs::write(
+        fixture.root.join(".workctl.json"),
+        r#"{"codeProvider":"github","workItemProvider":"github"}"#,
+    )
+    .expect("write GitHub worktree config");
 
-    let github = fixture.run(&["--provider", "github", "--help"], "");
+    let github = fixture.run_raw(&["--help"], "");
     assert!(github.status.success());
     let github_help = String::from_utf8_lossy(&github.stdout);
     assert!(github_help.starts_with("Manage work items and code-host requests"));
     assert!(github_help.contains("Provider resolution happens before command parsing"));
-    assert!(github_help.contains("`--code-provider` and `--work-item-provider`"));
-    assert!(github_help.contains("Legacy `--provider` applies to both domains"));
-    assert!(github_help.contains(".workctl.json"));
-    assert!(github_help.contains("Git origin host is the final fallback"));
+    assert!(github_help.contains("target project's Git worktree"));
+    assert!(github_help.contains("--repo-path PATH"));
+    assert!(github_help.contains("`--repo` overrides only the remote repository scope"));
+    assert!(!github_help.contains("--provider"));
+    assert!(!github_help.contains("--code-provider"));
+    assert!(!github_help.contains("--work-item-provider"));
     assert!(github_help.lines().any(|line| {
         line.trim_start().starts_with("issue ") && line.contains("Manage GitHub issues")
     }));
@@ -876,16 +1010,12 @@ fn root_help_documents_resolution_order_and_provider_groups() {
         line.trim_start().starts_with("pr ") && line.contains("Manage GitHub pull requests")
     }));
 
-    let mixed = fixture.run(
-        &[
-            "--code-provider",
-            "gitlab",
-            "--work-item-provider",
-            "github",
-            "--help",
-        ],
-        "",
-    );
+    fs::write(
+        fixture.root.join(".workctl.json"),
+        r#"{"codeProvider":"gitlab","workItemProvider":"github"}"#,
+    )
+    .expect("write mixed worktree config");
+    let mixed = fixture.run_raw(&["--help"], "");
     assert!(mixed.status.success());
     let mixed_help = String::from_utf8_lossy(&mixed.stdout);
     assert!(mixed_help.lines().any(|line| {
@@ -904,5 +1034,301 @@ fn root_help_documents_resolution_order_and_provider_groups() {
             .lines()
             .any(|line| line.trim_start().starts_with("gitlab "))
     );
+
+    for removed in [
+        ["--provider", "github", "issue", "list"],
+        ["--code-provider", "gitlab", "pr", "list"],
+        ["--work-item-provider", "github", "issue", "list"],
+    ] {
+        let output = fixture.run_raw(&removed, "");
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("invalid_input"));
+    }
     assert!(fixture.glab_invocations().is_empty());
+}
+
+/// RF-CLI.1: --repo-path selects provider grammar and execution context from a second checkout.
+#[test]
+fn repo_path_uses_target_worktree_config_and_rejects_non_worktrees() {
+    let caller = Fixture::new();
+    caller.init_git();
+    fs::write(
+        caller.root.join(".workctl.json"),
+        r#"{"codeProvider":"github","workItemProvider":"github"}"#,
+    )
+    .expect("write caller provider config");
+
+    let target = Fixture::new();
+    target.init_git();
+    fs::write(
+        target.root.join(".workctl.json"),
+        r#"{"codeProvider":"gitlab","workItemProvider":"gitlab","defaults":{"output":{"format":"json"}}}"#,
+    )
+    .expect("write target provider config");
+    assert!(
+        std::process::Command::new("git")
+            .args([
+                "remote",
+                "add",
+                "origin",
+                "https://gitlab.com/group/sub/project.git",
+            ])
+            .current_dir(&target.root)
+            .status()
+            .expect("add target GitLab origin")
+            .success()
+    );
+
+    let relative_path = format!(
+        "../{}",
+        target
+            .root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("target directory name is UTF-8")
+    );
+    let option = format!("--repo-path={relative_path}");
+    let output = caller.run_raw(&["issue", "list", &option], "");
+    assert_eq!(success_json(&output).as_array().unwrap().len(), 2);
+    assert!(!caller.glab_invocations().is_empty());
+    assert!(!caller.log.exists());
+    let github_caller = Fixture::new();
+    github_caller.init_git();
+    fs::write(
+        github_caller.root.join(".workctl.json"),
+        r#"{"codeProvider":"gitlab","workItemProvider":"gitlab"}"#,
+    )
+    .expect("write second caller provider config");
+    let github_target = Fixture::new();
+    github_target.init_git();
+    fs::write(
+        github_target.root.join(".workctl.json"),
+        r#"{"codeProvider":"github","workItemProvider":"github","defaults":{"output":{"format":"json"}}}"#,
+    )
+    .expect("write target GitHub config");
+    assert!(
+        std::process::Command::new("git")
+            .args(["remote", "add", "origin", "git@github.com:owner/repo.git"])
+            .current_dir(&github_target.root)
+            .status()
+            .expect("add target GitHub origin")
+            .success()
+    );
+    let relative_path = format!(
+        "../{}",
+        github_target
+            .root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("target directory name is UTF-8")
+    );
+    let option = format!("--repo-path={relative_path}");
+    let output = github_caller.run_raw(&["issue", "list", &option], "");
+    assert!(success_json(&output).is_array());
+    assert!(github_caller.log.exists());
+    assert!(github_caller.glab_invocations().is_empty());
+
+    let outside = caller.root.join("not-a-worktree");
+    fs::create_dir(&outside).expect("create non-worktree directory");
+    let outside = outside.to_str().expect("fixture path is UTF-8");
+    let rejected = caller.run_raw(
+        &["--repo-path", outside, "--format", "json", "issue", "list"],
+        "",
+    );
+    assert!(!rejected.status.success());
+    assert_eq!(error_json(&rejected)["code"], "context");
+    assert_eq!(caller.glab_invocations().len(), 2);
+}
+
+/// RF-CLI.1/RF-CFG.7: parse failures use the selected target's defaults, never the caller's.
+#[test]
+fn target_config_selects_parse_error_format_until_explicit_format_overrides_it() {
+    let caller = Fixture::new();
+    caller.init_git();
+    fs::write(
+        caller.root.join(".workctl.json"),
+        r#"{"codeProvider":"github","workItemProvider":"github","defaults":{"output":{"format":"text"}}}"#,
+    )
+    .expect("write caller output config");
+    let target = Fixture::new();
+    target.init_git();
+    fs::write(
+        target.root.join(".workctl.json"),
+        r#"{"codeProvider":"gitlab","workItemProvider":"gitlab","defaults":{"output":{"format":"json"}}}"#,
+    )
+    .expect("write target output config");
+    let target_path = target.root.to_str().expect("fixture path is UTF-8");
+
+    for invalid in [
+        vec!["issue", "unknown"],
+        vec!["issue", "list", "--unknown"],
+        vec!["issue", "view"],
+    ] {
+        let mut args = vec!["--repo-path", target_path];
+        args.extend(invalid);
+        let output = caller.run_raw(&args, "");
+        assert_eq!(output.status.code(), Some(2));
+        assert_eq!(error_json(&output)["code"], "invalid_input");
+    }
+    let explicit_text = caller.run_raw(
+        &[
+            "--repo-path",
+            target_path,
+            "issue",
+            "unknown",
+            "--format",
+            "text",
+        ],
+        "",
+    );
+    assert_eq!(explicit_text.status.code(), Some(2));
+    assert!(explicit_text.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&explicit_text.stderr).starts_with("invalid_input:"));
+
+    fs::write(
+        caller.root.join(".workctl.json"),
+        r#"{"codeProvider":"github","workItemProvider":"github","defaults":{"output":{"format":"json"}}}"#,
+    )
+    .expect("write JSON caller output config");
+    fs::write(
+        target.root.join(".workctl.json"),
+        r#"{"codeProvider":"gitlab","workItemProvider":"gitlab","defaults":{"output":{"format":"text"}}}"#,
+    )
+    .expect("write text target output config");
+    let target_text = caller.run_raw(&["--repo-path", target_path, "issue", "unknown"], "");
+    assert_eq!(target_text.status.code(), Some(2));
+    assert!(target_text.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&target_text.stderr).starts_with("invalid_input:"));
+
+    fs::write(
+        target.root.join(".workctl.json"),
+        r#"{"codeProvider":"gitlab","workItemProvider":"gitlab","defaults":{"output":{"format":"invalid"}}}"#,
+    )
+    .expect("write invalid target output config");
+    let fallback = caller.run_raw(&["--repo-path", target_path, "issue", "unknown"], "");
+    assert_eq!(fallback.status.code(), Some(2));
+    assert!(fallback.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&fallback.stderr).starts_with("invalid_input:"));
+    let explicit_json = caller.run_raw(
+        &[
+            "--repo-path",
+            target_path,
+            "issue",
+            "unknown",
+            "--format=json",
+        ],
+        "",
+    );
+    assert_eq!(error_json(&explicit_json)["code"], "invalid_input");
+    assert!(!caller.log.exists());
+    assert!(caller.glab_invocations().is_empty());
+}
+
+/// RF-CLI.1: an inline native-byte path selects the target rather than falling back to the caller.
+#[cfg(unix)]
+#[test]
+fn non_utf8_inline_repo_path_selects_target_worktree() {
+    use std::ffi::{OsStr, OsString};
+    use std::os::unix::ffi::OsStringExt;
+    use std::process::Command;
+
+    let caller = Fixture::new();
+    caller.init_git();
+    fs::write(
+        caller.root.join(".workctl.json"),
+        r#"{"codeProvider":"github","workItemProvider":"github"}"#,
+    )
+    .expect("write caller provider config");
+    assert!(
+        Command::new("git")
+            .args(["remote", "add", "origin", "git@github.com:owner/caller.git"])
+            .current_dir(&caller.root)
+            .status()
+            .expect("add caller GitHub origin")
+            .success()
+    );
+    let target = Fixture::new();
+    target.init_git();
+    fs::write(
+        target.root.join(".workctl.json"),
+        r#"{"codeProvider":"gitlab","workItemProvider":"gitlab","defaults":{"output":{"format":"json"}}}"#,
+    )
+    .expect("write target provider config");
+    assert!(
+        Command::new("git")
+            .args([
+                "remote",
+                "add",
+                "origin",
+                "https://gitlab.com/group/sub/project.git",
+            ])
+            .current_dir(&target.root)
+            .status()
+            .expect("add target GitLab origin")
+            .success()
+    );
+    let native_path = target
+        .root
+        .join(OsString::from_vec(b"native-\xff".to_vec()));
+    // Darwin filesystems reject invalid UTF-8 filenames; still exercise fail-closed native input.
+    #[cfg(not(target_os = "macos"))]
+    fs::create_dir(&native_path).expect("create native-byte target directory");
+    let mut option = OsString::from("--repo-path=");
+    option.push(&native_path);
+    assert!(option.to_str().is_none());
+
+    let mut paths = vec![caller.bin.clone()];
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    let path = std::env::join_paths(paths).expect("compose isolated PATH");
+    let run = |option: &OsStr, args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_workctl"))
+            .arg(option)
+            .args(args)
+            .current_dir(&caller.root)
+            .env("PATH", &path)
+            .env("WORKCTL_GH_LOG", &caller.log)
+            .env("WORKCTL_GH_INPUT", &caller.input)
+            .env("WORKCTL_GH_CWD_ROOT", &caller.root)
+            .env("WORKCTL_GH_MODE", "")
+            .env("WORKCTL_GLAB_LOG", &caller.glab_log)
+            .env("WORKCTL_GLAB_INPUT", &caller.glab_input)
+            .env("WORKCTL_GLAB_MODE", "")
+            .output()
+            .expect("run workctl with a native-byte target")
+    };
+
+    #[cfg(target_os = "macos")]
+    {
+        let rejected = run(&option, &["issue", "list", "--format", "json"]);
+        assert_eq!(error_json(&rejected)["code"], "context");
+        assert!(caller.glab_invocations().is_empty());
+        assert!(!caller.log.exists());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let output = run(&option, &["issue", "list"]);
+        assert_eq!(success_json(&output).as_array().unwrap().len(), 2);
+        assert_eq!(
+            caller.glab_invocations(),
+            [
+                "auth status --hostname gitlab.com".to_owned(),
+                format!("issue list --output json --repo {PROJECT} --page 1 --per-page 30"),
+            ]
+        );
+        assert!(!caller.log.exists());
+
+        let explicit = run(&option, &["issue", "unknown", "--format", "text"]);
+        assert_eq!(explicit.status.code(), Some(2));
+        assert!(explicit.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&explicit.stderr).starts_with("invalid_input:"));
+
+        option.push("/missing");
+        let invalid = run(&option, &["issue", "list", "--format", "json"]);
+        assert_eq!(error_json(&invalid)["code"], "context");
+        assert_eq!(caller.glab_invocations().len(), 2);
+        assert!(!caller.log.exists());
+    }
 }

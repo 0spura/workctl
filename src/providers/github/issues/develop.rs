@@ -22,8 +22,8 @@ pub(super) fn create(
     if let Some(base) = base {
         args.extend(["--base".to_owned(), base.to_owned()]);
     }
-    if let Some(name) = name {
-        args.extend(["--name".to_owned(), name.to_owned()]);
+    if let Some(slug) = name {
+        args.extend(["--name".to_owned(), branch_name(number, slug)]);
     }
     if checkout {
         args.push("--checkout".to_owned());
@@ -61,6 +61,15 @@ fn branch_from_reference(reference: &str) -> Result<String, AppError> {
         .filter(|branch| !branch.is_empty())
         .map(str::to_owned)
         .ok_or_else(AppError::provider_response)
+}
+
+fn branch_name(number: u64, slug: &str) -> String {
+    let prefix = format!("{number}-");
+    if slug.starts_with(&prefix) {
+        slug.to_owned()
+    } else {
+        format!("{prefix}{slug}")
+    }
 }
 
 fn text(stdout: &[u8]) -> Result<&str, AppError> {

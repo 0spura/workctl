@@ -4,7 +4,7 @@ use super::{
 };
 use crate::domain::{AppError, DecisionScore};
 
-const ENDPOINT: &str = "https://thejevai.com/v1/systemone";
+const ENDPOINT: &str = "https://api.typesafe.ai/v1/systemone";
 
 pub struct JevAdapter;
 

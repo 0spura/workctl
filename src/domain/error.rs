@@ -3,6 +3,14 @@ pub struct AppError {
     pub code: &'static str,
     pub message: &'static str,
     pub details: Option<serde_json::Value>,
+    pub(crate) partial_event: Option<PartialEvent>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PartialEvent {
+    pub resource: &'static str,
+    pub number: u64,
+    pub operation: &'static str,
 }
 
 impl AppError {
@@ -11,6 +19,7 @@ impl AppError {
             code,
             message,
             details: None,
+            partial_event: None,
         }
     }
 
@@ -27,7 +36,13 @@ impl AppError {
                 "completed": completed,
                 "pending": pending,
             })),
+            partial_event: None,
         }
+    }
+
+    pub(crate) fn with_partial_event(mut self, event: PartialEvent) -> Self {
+        self.partial_event = Some(event);
+        self
     }
 
     pub const fn invalid_input(message: &'static str) -> Self {

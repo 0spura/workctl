@@ -1,17 +1,15 @@
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 
-use clap::ValueEnum;
 use serde::Deserialize;
 
 use crate::config::{discover, files};
 use crate::domain::AppError;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Provider {
-    #[value(name = "github")]
     Github,
-    #[value(name = "gitlab")]
     Gitlab,
 }
 
@@ -21,15 +19,6 @@ impl Provider {
         match host.trim_end_matches('/').to_ascii_lowercase().as_str() {
             "github.com" => Some(Self::Github),
             "gitlab.com" => Some(Self::Gitlab),
-            _ => None,
-        }
-    }
-
-    /// Parses a `--provider` value without the command tree.
-    pub fn from_name(name: &str) -> Option<Self> {
-        match name {
-            "github" => Some(Self::Github),
-            "gitlab" => Some(Self::Gitlab),
             _ => None,
         }
     }
@@ -43,8 +32,8 @@ struct Remote {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderSelection {
-    pub code: Provider,
-    pub work_items: Provider,
+    pub code: Option<Provider>,
+    pub work_items: Option<Provider>,
 }
 
 /// Resolves repository scope for a single provider domain. A remote from another provider may
@@ -86,25 +75,40 @@ pub fn resolve_domain_context(
     Ok(repo)
 }
 
-/// Chooses independent providers for code-host and work-item command groups before parsing.
+/// Resolves an explicit local target to its Git worktree root.
 ///
-/// Domain-specific CLI selections override legacy `--provider`; domain-specific configuration
-/// overrides legacy `provider`; the Git origin is the final fallback.
-pub fn select_providers(
-    explicit_code: Option<&str>,
-    explicit_work_items: Option<&str>,
-    legacy_explicit: Option<&str>,
-    cwd: &Path,
-) -> ProviderSelection {
+/// Relative paths are anchored to the caller's original working directory. A supplied path must
+/// exist, be a directory, and belong to a Git worktree; it never falls back to the caller context.
+pub fn target_worktree_root(cwd: &Path, repo_path: &Path) -> Result<PathBuf, AppError> {
+    let path = if repo_path.is_absolute() {
+        repo_path.to_path_buf()
+    } else {
+        cwd.join(repo_path)
+    };
+    let path = path
+        .canonicalize()
+        .map_err(|_| AppError::context("could not resolve the target project path"))?;
+    if !fs::metadata(&path)
+        .map_err(|_| AppError::context("could not inspect the target project path"))?
+        .is_dir()
+    {
+        return Err(AppError::context(
+            "the target project path must be a Git worktree directory",
+        ));
+    }
+    discover::git_root(&path)?.ok_or(AppError::context(
+        "the target project path is not inside a Git worktree",
+    ))
+}
+
+/// Chooses independent providers from the selected worktree's configuration and Git origin
+/// before parsing.
+pub fn select_providers(cwd: &Path) -> ProviderSelection {
     let Ok(Some(root)) = discover::git_root(cwd) else {
-        return selection_from_values(
-            explicit_code,
-            explicit_work_items,
-            legacy_explicit,
-            None,
-            None,
-            None,
-        );
+        return ProviderSelection {
+            code: None,
+            work_items: None,
+        };
     };
     let config = files::load(&root).ok();
     let remote = discover::origin_remote(&root)
@@ -114,39 +118,17 @@ pub fn select_providers(
         .map(|remote| remote.provider);
     let code_config = config.as_ref().and_then(|config| config.code_provider);
     let work_item_config = config.as_ref().and_then(|config| config.work_item_provider);
-    let legacy_config = config.as_ref().and_then(|config| config.provider);
-    selection_from_values(
-        explicit_code,
-        explicit_work_items,
-        legacy_explicit,
-        code_config,
-        work_item_config,
-        legacy_config.or(remote),
-    )
+    selection_from_values(code_config, work_item_config, remote)
 }
 
 fn selection_from_values(
-    explicit_code: Option<&str>,
-    explicit_work_items: Option<&str>,
-    legacy_explicit: Option<&str>,
     code_config: Option<Provider>,
     work_item_config: Option<Provider>,
     fallback: Option<Provider>,
 ) -> ProviderSelection {
-    let legacy_explicit = legacy_explicit.and_then(Provider::from_name);
     ProviderSelection {
-        code: explicit_code
-            .and_then(Provider::from_name)
-            .or(legacy_explicit)
-            .or(code_config)
-            .or(fallback)
-            .unwrap_or(Provider::Github),
-        work_items: explicit_work_items
-            .and_then(Provider::from_name)
-            .or(legacy_explicit)
-            .or(work_item_config)
-            .or(fallback)
-            .unwrap_or(Provider::Github),
+        code: code_config.or(fallback),
+        work_items: work_item_config.or(fallback),
     }
 }
 
@@ -334,10 +316,10 @@ mod tests {
             r#"{"codeProvider":"gitlab","workItemProvider":"github"}"#,
         )
         .expect("write mixed provider configuration");
-        let selected = select_providers(None, None, None, &root.0);
-        assert_eq!(selected.code, Provider::Gitlab);
-        assert_eq!(selected.work_items, Provider::Github);
-        let resolved = resolve_domain_context(selected.work_items, None, &root.0)
+        let selected = select_providers(&root.0);
+        assert_eq!(selected.code, Some(Provider::Gitlab));
+        assert_eq!(selected.work_items, Some(Provider::Github));
+        let resolved = resolve_domain_context(selected.work_items.unwrap(), None, &root.0)
             .expect("resolve issue scope");
         assert_eq!(resolved, "owner/repo");
 
@@ -493,7 +475,7 @@ mod tests {
     }
 
     #[test]
-    fn selects_the_grammar_provider_before_parsing() {
+    fn selects_independent_providers_from_current_worktree_config_and_origin() {
         let root = TempRoot::new();
         assert!(
             Command::new("git")
@@ -503,22 +485,8 @@ mod tests {
                 .expect("run git init")
                 .success()
         );
-        assert_eq!(
-            select_providers(None, None, None, &root.0).code,
-            Provider::Github
-        );
-        assert_eq!(
-            select_providers(None, None, None, &root.0).work_items,
-            Provider::Github
-        );
-        assert_eq!(
-            select_providers(Some("gitlab"), None, None, &root.0).code,
-            Provider::Gitlab
-        );
-        assert_eq!(
-            select_providers(Some("gitlab"), None, None, &root.0).work_items,
-            Provider::Github
-        );
+        assert_eq!(select_providers(&root.0).code, None);
+        assert_eq!(select_providers(&root.0).work_items, None);
         assert!(
             Command::new("git")
                 .args(["remote", "add", "origin", "git@gitlab.com:g/p.git"])
@@ -527,23 +495,49 @@ mod tests {
                 .expect("add origin")
                 .success()
         );
-        assert_eq!(
-            select_providers(None, None, None, &root.0).code,
-            Provider::Gitlab
+        assert_eq!(select_providers(&root.0).code, Some(Provider::Gitlab));
+        assert_eq!(select_providers(&root.0).work_items, Some(Provider::Gitlab));
+        fs::write(
+            root.0.join(".workctl.json"),
+            r#"{"codeProvider":"github","workItemProvider":"gitlab"}"#,
+        )
+        .expect("write worktree provider configuration");
+        let selected = select_providers(&root.0);
+        assert_eq!(selected.code, Some(Provider::Github));
+        assert_eq!(selected.work_items, Some(Provider::Gitlab));
+    }
+    #[test]
+    fn provider_selection_uses_the_current_worktree_not_another_project() {
+        let root = TempRoot::new();
+        assert!(
+            Command::new("git")
+                .args(["init", "--quiet"])
+                .current_dir(&root.0)
+                .status()
+                .expect("initialize second project")
+                .success()
         );
-        assert_eq!(
-            select_providers(None, None, None, &root.0).work_items,
-            Provider::Gitlab
+        assert!(
+            Command::new("git")
+                .args([
+                    "remote",
+                    "add",
+                    "origin",
+                    "git@github.com:other/project.git"
+                ])
+                .current_dir(&root.0)
+                .status()
+                .expect("add second project origin")
+                .success()
         );
-        assert_eq!(
-            select_providers(None, None, Some("bogus"), &root.0).code,
-            Provider::Gitlab
-        );
-        fs::write(root.0.join(".workctl.json"), r#"{"provider":"github"}"#)
-            .expect("write shared configuration");
-        assert_eq!(
-            select_providers(None, None, None, &root.0).code,
-            Provider::Github
-        );
+        fs::write(
+            root.0.join(".workctl.json"),
+            r#"{"codeProvider":"gitlab","workItemProvider":"github"}"#,
+        )
+        .expect("write second project config");
+
+        let selected = select_providers(&root.0);
+        assert_eq!(selected.code, Some(Provider::Gitlab));
+        assert_eq!(selected.work_items, Some(Provider::Github));
     }
 }

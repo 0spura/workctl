@@ -94,3 +94,46 @@ pub fn parse_non_blank(value: &str) -> Result<String, &'static str> {
         Ok(value.to_owned())
     }
 }
+
+/// Arguments shared by the GitHub and GitLab `issue develop` command.
+#[derive(Debug, Args)]
+#[command(
+    after_help = "With --name, provide a short lowercase slug without the issue number; workctl prefixes the IID. \
+The branch is remote-only unless --checkout is specified."
+)]
+pub struct IssueDevelopArgs {
+    /// Issue number
+    pub number: IssueNumber,
+    /// Branch to create from; defaults to the provider's issue-branch base
+    #[arg(long, value_parser = parse_non_blank, conflicts_with = "list")]
+    pub base: Option<String>,
+    /// Short lowercase hyphenated slug; workctl prefixes the issue IID
+    #[arg(long, value_name = "SLUG", value_parser = parse_branch_slug, conflicts_with = "list")]
+    pub name: Option<String>,
+    /// Check out the created branch in the current worktree
+    #[arg(long, conflicts_with = "list")]
+    pub checkout: bool,
+    /// List the branches linked to the issue
+    #[arg(long)]
+    pub list: bool,
+}
+
+pub fn parse_branch_slug(value: &str) -> Result<String, &'static str> {
+    let mut previous_hyphen = false;
+    for (index, character) in value.chars().enumerate() {
+        let valid_alphanumeric = character.is_ascii_lowercase() || character.is_ascii_digit();
+        if valid_alphanumeric {
+            previous_hyphen = false;
+            continue;
+        }
+        if character == '-' && index > 0 && !previous_hyphen {
+            previous_hyphen = true;
+            continue;
+        }
+        return Err("branch name must be a lowercase hyphenated slug");
+    }
+    if value.is_empty() || previous_hyphen {
+        return Err("branch name must be a lowercase hyphenated slug");
+    }
+    Ok(value.to_owned())
+}

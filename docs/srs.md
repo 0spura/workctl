@@ -12,17 +12,16 @@ Actors: a developer or coding agent running `workctl` locally. Observable behavi
 
 - GitHub issue commands are `create|list|blockers|view|edit|comment|lock|develop`; GitHub pull-request commands are `create|checkout|list|view|status|diff|checks|review|merge|edit|ready|comment|lock|revert|update-branch`.
 - Provider selection is independent by command domain and happens before command grammar parsing. `issue` uses the work-item provider; `pr` and `mr` use the code-host provider.
-- `--code-provider` overrides the code-host provider and `--work-item-provider` overrides the work-item provider. Legacy `--provider` applies to both domains unless the corresponding domain-specific flag is present.
-- For each domain, precedence is domain-specific CLI flag > legacy `--provider` > domain-specific configuration > legacy `provider` configuration > known Git origin host. Unsupported providers fail closed.
-- Each provider owns a static grammar. Native operations mirror that provider's CLI, with GitHub-only `blockers` and `develop`; another provider's verb or flag is a usage error rather than a runtime rejection.
-- Top-level `--help` is provider-neutral and states the resolution order; a subcommand's help reflects its resolved domain provider's grammar.
-- `--repo OWNER/REPO`, `--provider`, `--code-provider`, `--work-item-provider`, and `--format json|text` are global overrides accepted before or after the group. `--repo` supplies scope to the selected command only.
+- Each domain resolves from its matching project setting (`codeProvider` or `workItemProvider`), then the selected worktree's Git origin host. The generic `provider` setting and all provider-selection CLI flags are removed; unsupported or unresolved providers fail closed.
+- Each provider owns a static grammar. Native operations mirror that provider's CLI; GitHub-only `blockers` and provider-supported `develop` are exposed only where implemented. Unsupported verbs or flags fail as usage errors before provider access.
+- Top-level `--help` is provider-neutral and describes worktree-based resolution; a subcommand's help reflects its resolved domain provider's grammar.
+- Global `--repo-path PATH` selects a local target Git worktree. Relative paths resolve from the invocation's original current directory; config, origin, provider grammar, repository defaults, and execution context come from the selected target worktree. A missing, non-directory, or non-worktree path fails before provider access without falling back to the caller's checkout.
+- `--repo OWNER/REPO` and `--format json|text` are global overrides accepted before or after the group. `--repo` supplies remote resource scope within the selected target provider; it does not select a provider.
 - Help and version work without `git`, `gh`, or `glab` installed.
 - Every flag carries a help description, and each subcommand prints usage examples for behavior a caller cannot infer from flag names — for `issue edit` and `pr edit`, the body-change set and exact-match patch contract; for `pr list`, filter composition; for `pr merge`, when an explicit method is required; for `pr status`, the review/mergeability/required-check evidence it reports; for `pr update-branch`, default merge-commit versus explicit rebase behavior; for `pr checks --watch`, bounded waiting; for `pr checkout`, its current-worktree effect and absence of forced checkout; and for `issue develop`, the remote-only branch creation and the `--checkout` effect.
 - There is no delete command for issues or pull requests in v0.
 
-**Acceptance:** With GitHub selected for both domains, `workctl issue --help` lists exactly seven supported issue subcommands and `workctl pr --help` lists exactly fifteen supported pull-request subcommands. With GitLab selected for code and GitHub for work items, root help exposes GitHub `issue` and GitLab `mr`, and each command executes through its owning provider. An unknown command produces a structured JSON error on stderr and a nonzero exit; unsupported provider verbs/flags are usage errors. Unsupported provider configuration fails before provider access. No flag in subcommand help is printed without a description, and `workctl issue edit --help` documents `patch_conflict` and exact-context matching.
-**Verification:** CLI integration test.
+**Acceptance:** The selected project provider determines issue grammar, including `develop` on GitHub and GitLab; each command executes through its owning provider. Running workctl from another Git worktree or selecting one with `--repo-path` uses that repository's config and origin. Relative target paths resolve from the original caller directory. Invalid target paths fail before provider access. `--repo` overrides remote scope only within the target provider. Removed provider flags and the generic `provider` config key are rejected, with no compatibility alias. An unknown command produces a structured JSON error on stderr and a nonzero exit; unsupported verbs/flags are usage errors. Unsupported or unresolved provider context fails before provider access. No flag in subcommand help is printed without a description, and `workctl issue edit --help` documents `patch_conflict` and exact-context matching.
 
 ### RF-WI.1: Create an issue
 **Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.1, RF-PRV.1
@@ -148,15 +147,15 @@ Issue unlocking is now `issue lock NUMBER --undo`; there is no `issue unlock` al
 
 
 ### RF-WI.13: Create or list the branches linked to an issue
+
 **Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CLI.1
 
-- `issue develop NUMBER` takes a positive issue number and creates the branch GitHub links to the issue through native `gh issue develop`. `--base BRANCH` creates it from that branch instead of the repository default; `--name BRANCH` names it, otherwise GitHub derives one from the issue; `--checkout` also checks it out in the current worktree. The branch is created on the remote, and workctl never creates, moves, or deletes a local branch itself.
-- `--list` reports the branches already linked to the issue and performs no write. It conflicts with `--base`, `--name`, and `--checkout`, so a creating flag combined with `--list` is a usage error reported before provider access.
-- Success output is `{number,branch}` for a creation and `{number,branches}` for a listing, with branches in provider order and an empty array when none are linked. The branch name is read from the reference `gh` prints; output carrying no branch reference, or a branch list that is not valid UTF-8, fails with `provider_response`.
-- Errors: `dependency` when `gh` is unavailable, `authentication` when unauthenticated, `timeout` and `output_limit` from the bounded runner, `provider_response` for unparsable output, and `github_cli` for any other failure of the native command.
+- `issue develop NUMBER` creates a remote branch linked to the issue for both GitHub and GitLab. `--base BRANCH` overrides the provider's default base. If `--name SLUG` is supplied, SLUG is a lowercase hyphenated name without the issue number, and workctl prefixes the issue IID (for example, issue 12 with `--name auth-session-expiry` creates `12-auth-session-expiry`). Without `--name`, GitHub uses native naming and GitLab follows the project's issue-branch template.
+- `--checkout` checks out the created branch only when explicitly requested. `--list` reports branches linked by IID and performs no write; it conflicts with `--base`, `--name`, and `--checkout`.
+- Success output is `{number,branch}` for creation and `{number,branches}` for listing. Invalid slugs fail before provider access; provider write errors produce no success output.
 
-**Acceptance:** Creation and listing forward exactly the requested flags and report the branch name or names; `--list` never creates a branch; provider failure produces no success output.
-**Verification:** `tests/cli_issues.rs` covers creation, listing, text output, provider failure, and the flag conflict.
+**Acceptance:** Both providers create remote IID-prefixed branches for a supplied slug; only `--checkout` changes the current worktree; `--list` returns matching branches without writes; invalid slugs and provider failures fail closed.
+**Verification:** `tests/cli_issues.rs` and `tests/cli_gitlab.rs` cover provider naming, branch listing, bad slugs, provider write error, and checkout preflight. A live GitLab test issue (#4) was linked to remote branch `4-branch-link-smoke`; `issue develop --list` returned it, and no merge request used that branch.
 
 
 ### Proposed extension RF-WI.5: Private semantic declaration on issue create
@@ -421,6 +420,7 @@ Pull-request unlocking is now `pr lock NUMBER --undo`; there is no `pr unlock` a
 - GitLab-specific host capabilities are limited to the native issue and merge-request grammar; interactive `glab issue board view` and destructive `glab issue delete` remain excluded.
 - GitLab issue grammar exposes create/list/view/update/close/reopen/note/subscribe/unsubscribe. Native issue create/update fields include confidentiality, due date, epic, linked issues/MRs, time estimate/spent, weight, and templates; only provider-supported fields are valid, and destructive/interactive operations require explicit safe contracts.
 - The GitLab `mr` grammar exposes list/view/diff/checkout/close/reopen/approve/revoke/rebase/subscribe/unsubscribe/todo/merge/note create/list/update/resolve/reopen/create/update/approvers/issues. Remaining `glab mr` commands are `for` (deprecated alias for `create --related-issue`) and destructive `delete`; delete is excluded absent a safe confirmation contract.
+- `mr issues IID` returns GitLab's related-issues API results (references from MR content); it does not mean only issues closed on merge. The related-issues response can omit `references`, in which case text output uses `#IID`.
 - GitLab-only issue filters and metadata (confidentiality, weight, due date, epics, iterations, linking) stay provider-specific. Unsupported GitHub capabilities are never fabricated from missing GitLab data.
 - `glab issue list --group` is excluded because the selected repository grammar is project-scoped; `--epic` requires a group context and does not paginate, so it is not mapped onto a project list. These group-level queries need an explicit group-target CLI contract rather than inference from the selected project.
 - Each valid GitLab operation authenticates with `glab auth status --hostname` using the selected project host before invoking the operation; local syntax/field validation completes first. The project reaches `glab` as a full HTTPS project URL, so the host never depends on the working directory.
@@ -565,26 +565,27 @@ Pull-request unlocking is now `pr lock NUMBER --undo`; there is no `pr unlock` a
 ### RF-CFG.1: Project configuration
 **Priority:** Must Have | **Status:** Implemented | **Dependencies:** none
 
-- Both optional files are discovered at the Git worktree root and validated on every command invocation, even when CLI flags override selected values. Local top-level fields, including the entire `defaults` object, replace the corresponding shared fields; `decisionModel` merges key by key so a local credential can combine with shared settings (RF-CFG.9).
-- The strict schema contains legacy `provider`, independent `codeProvider` and `workItemProvider`, `decisionModel`, and `defaults`; code and work-item provider values are currently `github` or `gitlab`. `provider` remains a compatibility default for both domains; domain-specific fields override it. Linear is not yet a supported provider and must be rejected, never silently routed to GitHub or GitLab.
+- Both optional files are discovered at the selected Git worktree root and validated on every command invocation. The default target is the caller's worktree; global `--repo-path PATH` selects another local target. Local top-level fields, including the entire `defaults` object, replace the corresponding shared fields; `codeProvider` and `workItemProvider` merge independently, and `decisionModel` merges key by key so a local credential can combine with shared settings (RF-CFG.9).
+- The strict schema contains independent `codeProvider` and `workItemProvider`, `decisionModel`, and `defaults`; provider values are currently `github` or `gitlab`. The generic `provider` key is removed and is rejected as unknown. Linear is not supported and must be rejected, never silently routed to GitHub or GitLab.
 - `.workctl.local.json` is gitignored. Old `.mcp-tracker*.json` files are not read or migrated.
-- No configuration file is required when providers and the command-specific repository can be resolved from flags or the Git origin.
+- No provider-selection flags exist. `--repo-path` is resolved relative to the caller's original directory and must point to a directory inside a Git worktree; provider grammar, config, origin, and command context use the target root. Invalid explicit paths fail before provider access without fallback. `--repo` changes remote resource scope only and does not fetch remote configuration.
 
-**Acceptance:** Shared and local provider settings merge independently by domain, while local values override matching shared values; `provider` is a fallback for both domains. Malformed, unknown, oversized, symlink, or non-regular configuration yields a safe JSON error even when flags override effective providers. Linear and unsupported provider names fail closed.
-**Verification:** Configuration unit tests using temporary Git roots, including independent code/work-item overrides and legacy fallback.
+**Acceptance:** Shared and local provider settings merge independently by domain, including when a second local worktree is selected; the generic `provider` key and malformed, unknown, oversized, symlink, or non-regular configuration fail safely. Linear and unsupported provider names fail closed.
+**Verification:** Configuration unit tests using temporary Git roots, including independent code/work-item overrides and generic-key rejection; `tests/cli_gitlab.rs::repo_path_uses_target_worktree_config_and_rejects_non_worktrees` verifies that target settings and output defaults take precedence over the caller and invalid targets invoke no provider.
 
 ### RF-CFG.2: Provider and repository resolution
 **Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.1
 
-- Provider precedence is resolved independently for each domain: domain-specific CLI flag (`--code-provider` or `--work-item-provider`) > legacy `--provider` > matching domain-specific configuration (`codeProvider` or `workItemProvider`) > legacy configuration `provider` > known Git origin host.
-- `issue` is owned by the work-item provider; `pr`/`mr` is owned by the code-host provider. Grammar selection happens before parsing and requires no network. Unknown or unsupported configured values fail closed rather than falling back.
-- `--repo` scopes only the selected command; precedence is explicit `--repo` > the `origin` repository when its host matches the selected provider. If the provider and origin host differ, an explicit repository is required.
+- Provider selection is resolved independently for each domain: matching project setting (`codeProvider` or `workItemProvider`) overrides the selected worktree's Git origin host. Generic `provider` configuration and provider-selection CLI flags are removed. Unknown provider values fail closed.
+- `issue` is owned by the work-item provider; `pr`/`mr` is owned by the code-host provider. Grammar selection happens before parsing and requires no network.
+- `--repo-path PATH` selects a local worktree before provider grammar parsing; its config and origin define provider selection. A supplied path must resolve to a directory inside a Git worktree, relative to the caller's original directory, or fail closed.
+- `--repo` scopes only the selected command; it does not select a provider. If a domain setting selects a provider that differs from the target origin, an explicit repository scope is required.
 - `--repo` accepts `[HOST/]OWNER[/...]/REPO`; GitLab also accepts a full HTTPS project URL, including self-managed instances. URL credentials, query strings, fragments, non-HTTPS schemes, and invalid project paths are rejected.
-- GitHub and known GitLab hosts resolve from configuration, remote host, or provider flags. Other hosts require explicit GitLab selection and a full project URL; unknown hosts do not fall back to a supported provider.
-- When outside a Git worktree, an explicit provider and repository are required.
+- GitHub and `gitlab.com` resolve from their remote hosts. Other hosts require a matching domain-specific GitLab setting and a full HTTPS project URL; unknown hosts do not fall back to a supported provider.
+- Provider operations require a local target Git worktree whose origin or domain-specific config identifies the provider. `--repo` alone cannot identify a provider.
 
-**Acceptance:** Mixed code/work-item provider selections use the correct native grammar and provider adapter independently. Domain-specific flags override the legacy flag in their own domain; legacy config and Git origin provide fallback in that order. HTTPS and SSH remotes resolve to their repository paths; self-managed GitLab URLs preserve their host for authentication/operations. Unknown remotes, invalid provider names, mismatched provider without explicit repo, unsafe URLs, and missing repository scope fail closed; `group/subgroup/project` is accepted for GitLab and rejected for GitHub.
-**Verification:** Unit tests for provider selection, domain repository resolution, and remote parsing; CLI integration tests exercise mixed-provider routing and unsupported configuration.
+**Acceptance:** Mixed code/work-item provider selections use the correct native grammar and provider adapter independently. Domain-specific config overrides the selected target origin. `--repo-path` resolves local target configuration and origin before grammar parsing; relative paths use caller cwd, while missing/non-worktree paths fail before provider access. HTTPS and SSH remotes resolve to their repository paths; self-managed GitLab URLs preserve their host for authentication/operations. Generic provider settings and removed selector flags are rejected; unknown remotes, mismatched provider without explicit repo, unsafe URLs, and missing provider/repository context fail closed; `group/subgroup/project` is accepted for GitLab and rejected for GitHub.
+**Verification:** Unit tests for provider selection, worktree config isolation, domain repository resolution, and remote parsing; CLI integration tests exercise mixed-provider routing, `--repo-path` across GitHub and GitLab, invalid local targets, removed flags, and unsupported configuration.
 
 ### RF-CFG.3: GitHub issue defaults and label candidates
 **Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.1, RF-CFG.2
@@ -671,6 +672,89 @@ Pull-request unlocking is now `pr lock NUMBER --undo`; there is no `pr unlock` a
 **Acceptance:** Tests assert default text, explicit JSON compatibility, truthful no-op and queued outcomes, batch acknowledgements, retained read content, safe partial-success recovery, output streams, and exit status. Raw provider diagnostics and terminal controls never reach error output.
 **Verification:** Focused CLI integration suites, output unit tests, and built-binary fixture scenarios.
 
+### RF-CFG.10: Event endpoint configuration
+**Priority:** Must Have | **Status:** Specified | **Dependencies:** RF-CFG.1
+
+- The private user-global `config.json` in the platform workctl config directory stores endpoint definitions under `events.endpoints`, keyed by ID; each entry has `url` and `token`. Tokens use Bearer authentication and are stored only in this private file. HTTPS is required.
+- Repository-local `.workctl.local.json` opts in with `events.endpoints`, a list of IDs already defined globally. Shared `.workctl.json` cannot contain `events`.
+- On Unix, global config must have mode 0600. On Windows, global config lives at `%LOCALAPPDATA%\workctl\config.json` and state at `%LOCALAPPDATA%\workctl\state`; both require protected DACLs granting access only to the current user, SYSTEM, and Builtin Administrators. Reject unsafe existing ACLs, reparse/junction paths, and non-local or ACL-incompatible storage; require manual correction instead of silent repair. The boundary excludes hostile same-user, SYSTEM, and administrator processes.
+- Windows ancestry may allow read/traverse/list access to other accounts only when ancestors are owned by the current user, SYSTEM, Administrators, or TrustedInstaller and those accounts cannot change ACL/owner or delete/replace selected components. Sibling creation is allowed only if each created directory is reopened and validated with the private DACL. Reject unrecognized ACE forms.
+
+**Acceptance:** A shared config cannot activate delivery or redirect events. A local opt-in selects configured endpoints only; credentials never enter errors or logs. With no local opt-in, no event request occurs.
+**Verification:** Config unit tests and built-binary tests with isolated global/shared/local config fixtures and HTTP endpoints.
+
+### RF-EVT.1: Mutation outbox and opportunistic delivery
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.10, RNF-EXT.1, RNF-SEC.1
+
+- Emit one CloudEvents 1.0 structured JSON event per confirmed workctl mutation target. `source` is `urn:workctl:<provider>:<owner/repo>`; `type` is `workctl.<resource>.<action>`; `subject` is `/<resource>/<id>`. Resource is `issue` or `pull_request`; actions include `created`, `updated`, `closed`, `reopened`, `commented`, and `merged`. Add `data.schema_version: 1` and a bounded operation discriminator so linked-branch creation and workctl-submitted review outcome are distinguishable without changing resource identity. `data` may carry only fully qualified, explicitly supplied related issue references, `origin: command|workflow`, and optional `causation_id`, plus repository/resource/action/outcome. It excludes bodies, credentials, and raw provider diagnostics.
+- The same immutable typed mutation receipt feeds both the local workflow consumer and configured HTTP endpoints. Persist the event, enabled endpoint deliveries, and approved local workflow actions in one SQLite transaction before dispatch; workflow-only opt-in persists events even without HTTP endpoints. Endpoint delivery and workflow execution are independent consumers.
+- Persist the outbox in private SQLite under the user's platform state directory. The database is local to the producer and never shared with or read directly by Atlas.
+- After each eligible mutating invocation, attempt HTTP and local workflow work within one aggregate 1-second deadline. No resident daemon is required. HTTP `2xx` marks only that endpoint complete; failures remain pending for later workctl use. A competing local dispatcher does not block the invocation.
+- On Windows, use the same private DACL principal policy for the outbox and reject unsafe pre-existing database/sidecar ACLs. SQLite's standard Windows VFS does not guarantee atomic no-follow on every open; verify the opened database handle and do not claim protection from a hostile same-user process.
+- HTTP delivery is at-least-once: retries may duplicate events; each event has a stable unique ID for receiver-side deduplication. Desired-state workflow actions reconcile before retry; completed actions are not repeated. A comment or other non-idempotent action whose write may have reached the provider becomes `uncertain` and is never automatically repeated.
+- The event writer and remote provider cannot share a transaction; a process crash after provider confirmation but before local enqueue may lose the event and its workflow actions. A local outbox failure or consumer failure after confirmed remote mutation does not turn that mutation into command failure; emit a concise safe warning. Do not execute unpersisted workflow actions.
+- `pr ready NUMBER` emits a confirmed `workctl.pull_request.ready` event only when the command marks a pull request ready; converting it back to draft does not emit that event.
+
+**Acceptance:** Isolated provider fixtures verify event count and content for successful, batched, partial, no-op, read-only, and pre-write failure paths. Multiple endpoints record independent delivery state; one endpoint's failure does not undo another's success. A delayed/unavailable endpoint cannot exceed the aggregate deadline or change provider outcome/CLI exit status. Restarted outbox state retains pending deliveries, and duplicate delivery uses the same event ID. Tests assert payloads omit bodies and credentials.
+**Verification:** SQLite unit tests, built-binary CLI/HTTP-fixture tests, and a restart/replay scenario.
+
+**Known limitation:** The outbox guarantees replay only after local persistence. It cannot atomically capture an external provider mutation; there is an unavoidable crash window before enqueue.
+
+**Non-goals:** Provider-native GitHub/GitLab webhooks, a resident workctl daemon, delivery of read commands, and exactly-once delivery.
+
+### RF-WF.1: Shared workflow rules and local approval
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.1, RF-CFG.10, RF-EVT.1
+
+- Shared `.workctl.json` may define ordered, typed workflow rules for issue creation, linked-branch creation, pull-request creation, confirmed pull-request merge, and workctl-submitted review approval. A rule may request stage/Project-field changes, label additions/removals, assignee additions/removals, or comments.
+- Workflow rules are declarative data only. Reject shell commands, arbitrary argv, environment/file interpolation, unknown actions, invalid provider combinations, excessive rule counts, or excessive action expansion before the originating provider write. Limit explicit PR issue references to 32; cap aggregated PR-trigger expansion at 16 actions and issue/linked-branch triggers at 512.
+- Rules remain inactive until the user runs `workctl workflow approve` in the repository. The approval is stored in `.workctl.local.json` as a fingerprint of the canonical shared workflow rule set, repository scope, and GitHub Project destination profile. Changing the rules, scope, or Project destination pauses only local workflow execution until reapproved; normal workctl mutations and separately configured HTTP delivery remain usable.
+- Approval requires `.workctl.local.json` to be Git-untracked and ignored by the repository. Workctl never silently adds ignore rules or writes local opt-in merely because a rule exists.
+- The local workflow consumer runs only during eligible workctl invocations. It does not start a daemon and does not run from read-only commands.
+
+**Acceptance:** Shared rules never execute without an exact local approval. Changing a rule pauses automation until a new approval; unrelated mutation success and HTTP endpoint delivery remain unchanged. Unignored or tracked local opt-in fails closed. Unknown, malformed, or over-limit rules are rejected before mutation.
+**Verification:** Config tests cover canonical fingerprints, repository scoping, approval invalidation, ignore/index behavior, unsupported actions, and action limits; built-binary tests exercise approval and mutation with isolated configs.
+
+### RF-WF.2: Mutation-driven workflow planning and execution
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-WF.1, RF-EVT.1, RF-WI.1, RF-PR.1, RF-GL.1
+
+- The same typed, confirmed mutation receipt feeds local workflow planning and HTTP event generation. Triggers match only the approved workctl mutation facts; reads, no-ops, unconfirmed outcomes, and mutations performed outside workctl do not trigger local rules.
+- Materialize explicit, ordered actions for fully qualified targets. Issue creation and linked-branch creation use their confirmed issue IDs. Pull-request creation, merge, and approval use only explicitly supplied, validated issue references; case-insensitive add/remove deltas persisted in a bounded active-reference table maintain those references across later PR events. Preserve partial-edit reference deltas only when the provider confirms the PR edit completed. Never infer relationships from issue/PR bodies, branch names, or titles. A merge trigger requires a follow-up PR read confirming merged state; an auto-merge queue request is not a merge event.
+- Stage changes resolve through shared provider-specific mappings: GitHub maps a stage to a Project field/value; GitLab maps a stage to a label. GitHub Project fields, labels, assignees, and comments retain native provider validation. GitLab assignee changes use relative membership operations so they cannot replace unrelated assignees. Unsupported action/provider combinations fail closed before the original mutation.
+- Confirmed workflow actions may create child mutation events for HTTP consumers, marked with origin and causation metadata. Child events are not re-evaluated by local workflow rules.
+- Store authored workflow comments privately; never put comment text, resource bodies, credentials, or raw provider diagnostics in event payloads or errors.
+
+**Acceptance:** Fixtures verify trigger/action planning, target qualification, multi-target ordering, partial confirmed progress, provider validation, and no event loops. No relationship is inferred from free text. Webhook payload tests verify body/comment/credential exclusion and stable event identity.
+**Verification:** Workflow planner/provider unit tests and built-binary CLI tests using isolated provider and HTTP fixtures.
+
+### RF-WF.3: Durable local action queue and failure isolation
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-WF.2, RF-EVT.1, RNF-SEC.1, RNF-TST.1
+
+- Persist the confirmed event, selected HTTP delivery rows, and materialized local workflow actions in the existing private SQLite outbox before either consumer executes. Workflow-only opt-in persists actions even with no HTTP endpoints. Every action is bound to its canonical repository scope and exact approval fingerprint; claim, stale recovery, inspection, and resolution remain within that scope and approval. HTTP and local action states progress independently.
+- Keep the existing aggregate 1-second opportunistic dispatch budget and no resident worker. Pending safe actions and endpoint deliveries are eligible on later mutating workctl use; a competing local dispatcher does not wait on an active one.
+- Reconcile desired-state actions (field assignment, label/assignee membership, state) before retry; do not repeat a completed action. Keep actions ordered per target and stop dependent target actions after conflict or uncertain state.
+- Comments and other non-idempotent actions may be attempted once automatically. A timeout/crash/provider failure after the write may have begun leaves an inspectable uncertain action; workctl never automatically repeats it. An explicit resolution operation may mark it complete or authorize a retry.
+- Local queue failure, automation failure, or HTTP failure never changes a confirmed provider mutation result or command exit status; report only a concise safe warning. Do not execute an action unless its plan is durably stored.
+- Provide bounded `workctl workflow status` with counts only for the active approved fingerprint and `workctl workflow actions --limit 1..100` for safe inspection. Listing and explicit `workctl workflow resolve <id> --applied|--retry` require the same current approval, including under explicit JSON output. Never display stored comment bodies or credentials.
+
+**Acceptance:** Restart/replay tests prove planned actions survive process exit; completed actions are not repeated; desired-state retries reconcile; ambiguous comments are not auto-retried; explicit resolution is scoped to the saved action; endpoint outages do not block local actions and vice versa; all consumers respect one aggregate deadline and preserve the provider result.
+**Verification:** SQLite state-transition tests, concurrency/restart tests, provider/HTTP fixture scenarios, and built-binary workflow status/approval/resolution smoke runs.
+
+
+### RF-WF.4: GitLab usage-time ledger
+**Priority:** Should Have | **Status:** Implemented | **Dependencies:** RF-WF.1, RF-WF.3, RF-GL.1
+
+- When enabled in the approved shared workflow configuration, workctl stores issue activity locally in the existing private SQLite state. It counts only workctl command runtime and the gap since the previous workctl invocation, capped by `idleTimeoutMinutes` (default 10); attribution requires the same repository, worktree, branch, provider, issue, and approval fingerprint. The local ledger stores start, finish, and accumulated milliseconds.
+- A GitLab session begins at the first explicit workctl issue command for an issue. A confirmed issue close ends the active session and submits its accumulated whole minutes through GitLab time tracking. Sub-minute remainder stays local. The action is durable and non-idempotent: ambiguous provider outcomes become `uncertain` and are never retried automatically.
+- Observed switches between workctl invocations break attribution. Raw Git branch switches and work performed outside the GitLab issue/MR commands in workctl cannot be observed; the idle cap bounds, but cannot eliminate, that attribution error.
+- No daemon, shell hook, inferred issue link, wall-clock charging, or GitLab start/end timestamp is used.
+
+**Acceptance:** Deterministic tests cover identical/different attribution keys and the 10-minute cap. A built-binary smoke test with an isolated GitLab CLI fixture verifies issue close submits accumulated whole minutes once; ambiguous time-entry outcomes become uncertain without automatic retry.
+**Verification:** Focused ledger, config, dispatcher, and built-binary GitLab CLI fixture tests pass. Live smoke on GitLab test issue #3 submitted 1m; GitLab `time_stats` confirmed 60 seconds. The action initially became `uncertain` and was marked applied only after the remote effect was confirmed; it was not retried.
+
+
+Known limitation: provider mutation and local SQLite enqueue cannot share a transaction. A crash after provider confirmation and before enqueue can lose both the workflow action and outgoing event.
+
+
 ## 2. Non-functional requirements
 
 ### RNF-SEC.1: Safe external command boundary
@@ -738,13 +822,13 @@ Pull-request unlocking is now `pr lock NUMBER --undo`; there is no `pr unlock` a
 ## 3. Non-goals for v0
 
 - Jira, local Markdown tracking, provider plugin systems, and project/board administration. Add/remove membership of an existing project is supported through GitHub CLI metadata flags.
-- Branch creation, checkout, or standalone deletion: `git` owns branch lifecycle. `--head`/`--base` select existing branches, and `--delete-branch` removes the remote head branch only, after a merge or close, leaving every local branch untouched.
-- Workflow automation and label/assignee/milestone administration. GitHub lifecycle state changes use `issue edit --state` and `pr edit --state`; conversation lock reversal uses `lock --undo`.
+- Standalone branch creation, local branch checkout, or standalone deletion: `git` owns local branch lifecycle. `issue develop` creates a remote linked branch; `--head`/`--base` select existing branches, and `--delete-branch` removes the remote head branch only after merge/close, leaving local branches untouched.
+- Workflow automation is specified by RF-WF.1–RF-WF.3. General label/assignee/milestone administration beyond existing issue/PR operations remains out of scope.
 - Inline review is limited to single diff lines; review-thread replies, multi-line ranges, file-wide comments, and comment attachments remain out of scope. `pr comment` and `issue comment` add top-level comments.
 - Listing the pull requests linked to an issue.
 - Checklists. GitHub relationship reads and edits are supported by `issue view`, `issue blockers`, and `issue edit`; a decision model never proposes relationships (ADR-0027).
 - Attachment listing, removal, or download; upload to issues/PRs is through `gh` 2.99.0 or newer.
-- Issue deletion (there is no delete command for issues or pull requests), interactive prompts, MCP transport, arbitrary HTTP integrations, generalized token management, automatic retries, telemetry, and pull-request automatic label assignment.
+- Issue deletion (there is no delete command for issues or pull requests), interactive prompts, MCP transport, arbitrary HTTP integrations beyond the configured mutation-event endpoints, generalized token management, resident background retries, general-purpose telemetry, and pull-request automatic label assignment.
 - Three-way merge or fuzzy patch application: a patch either matches the fetched body exactly or fails.
 
 ## 4. Glossary

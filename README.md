@@ -38,7 +38,7 @@ workctl issue edit 123 --parent 100 --add-sub-issue 124,125 --add-blocked-by 200
 workctl issue edit 123 --project-field "Priority=High" --clear-project-field "Start date"
 workctl issue comment 123 --body-file - < notes.md
 workctl issue lock 123 --reason resolved
-workctl issue develop 123 --name fix/parser-crash --checkout
+workctl issue develop 123 --name parser-crash --checkout # creates 123-parser-crash
 ```
 
 - `--label @auto` and `--project-field 'Priority=@auto'` pick from model scores; one request per
@@ -78,9 +78,7 @@ workctl pr revert 42 --title "Revert parser rewrite"
 ## GitLab
 
 GitLab mirrors `glab`, so GitHub spellings like `--state` are usage errors. `--help` shows the active
-grammar; provider is resolved before parsing. These examples assume a GitLab repository or
-`--work-item-provider gitlab`.
-
+grammar; run workctl from the target GitLab worktree so its origin and project config select it.
 ```sh
 workctl issue create --title "Unexpected crash" --description-file description.md --weight 2
 workctl issue update 12 --title "Crash on startup" --assignee=+alice --assignee=-bob
@@ -107,17 +105,26 @@ operations; no retry, no rollback.
 
 ## Repository and configuration
 
-Inside a worktree the repository comes from `origin` and the provider from its host; outside, pass
-`--provider` and `--repo`. Unknown hosts fail closed. Precedence: `--repo`, then `origin`.
+Run globally installed workctl from the target project's Git worktree, or select another local
+checkout with `--repo-path PATH`. The target worktree supplies the provider, `origin`, project
+configuration, and command context. Relative paths resolve from the caller's current directory;
+command file paths resolve from the selected worktree. `--repo` changes only remote resource scope
+within the selected provider. It does not select a provider or fetch configuration remotely.
+
+```sh
+workctl issue create --repo-path ../other-project --title "Fix the parser"
+```
+
 
 `.workctl.json` (committable) and `.workctl.local.json` (gitignored, wins) are read at the Git root,
-64 KiB max, non-symlink. Keys: `provider`/`workItemProvider`, `defaults.github.issue`
-(`assignees`, `labels`, `labelCandidates`, `project`), `defaults.github.pr` (`mergeMethod`,
-`deleteBranch`, `labels`, `assignees`, `reviewers`, `base`, `draft`), `defaults.gitlab.issue|mr`,
-`defaults.output.format`, `defaults.github.listLimit`, and `decisionModel` (`model`,
-`baseUrl`, local-only `apiKey`). Model choices: `jev-latest`, `laya`, `fastino/GLiDE`,
-`local/<model-id>` (loopback OpenAI-compatible endpoint; no hosted key). An explicit flag always
-beats configuration; unknown fields fail closed.
+64 KiB max, non-symlink. Provider keys: `codeProvider` and `workItemProvider`; the former generic
+`provider` key and provider CLI flags are removed. Remove `provider` from older config files.
+Other keys: `defaults.github.issue` (`assignees`, `labels`, `labelCandidates`, `project`),
+`defaults.github.pr` (`mergeMethod`, `deleteBranch`, `labels`, `assignees`, `reviewers`, `base`,
+`draft`), `defaults.gitlab.issue|mr`, `defaults.output.format`, `defaults.github.listLimit`, and
+`decisionModel` (`model`, `baseUrl`, local-only `apiKey`). Model choices: `jev-latest`, `laya`,
+`fastino/GLiDE`, `local/<model-id>` (loopback OpenAI-compatible endpoint; no hosted key). Explicit
+command options override applicable configured defaults; unknown fields fail closed.
 
 ```json
 {

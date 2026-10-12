@@ -29,6 +29,10 @@ pub struct PullRequestMutation {
     pub unchanged: bool,
     #[serde(skip)]
     pub gitlab: bool,
+    #[serde(skip)]
+    pub related_issue_references: Vec<crate::domain::ClosingReference>,
+    #[serde(skip)]
+    pub removed_related_issue_references: Vec<crate::domain::ClosingReference>,
 }
 
 #[derive(Clone, Copy)]
@@ -86,6 +90,14 @@ impl Serialize for GitLabMergeRequests {
     }
 }
 
+#[derive(Debug, Serialize)]
+pub struct WorkflowActionSummary {
+    pub id: String,
+    pub state: String,
+    pub action: String,
+    pub target_resource: String,
+    pub target_id: String,
+}
 #[derive(Serialize)]
 pub struct GitLabState {
     pub number: u64,
@@ -121,6 +133,8 @@ pub enum SuccessOutput {
         number: u64,
         method: Option<String>,
         auto: bool,
+        #[serde(skip)]
+        confirmed_merged: bool,
     },
     Review {
         number: u64,
@@ -173,6 +187,15 @@ pub enum SuccessOutput {
         action: String,
     },
     GitLabData(GitLabData),
+    WorkflowStatus {
+        status: String,
+        actions: std::collections::BTreeMap<String, u64>,
+    },
+    WorkflowActions(Vec<WorkflowActionSummary>),
+    WorkflowResolution {
+        id: String,
+        state: String,
+    },
 }
 
 pub fn write(format: OutputFormat, output: &SuccessOutput) -> Result<(), AppError> {

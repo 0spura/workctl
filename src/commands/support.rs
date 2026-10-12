@@ -125,14 +125,14 @@ fn decode(bytes: Vec<u8>) -> Result<String, AppError> {
 }
 
 /// Resolves repository scope for the selected command's provider domain.
-pub(super) fn resolve_repo(
+pub(crate) fn resolve_repo(
     provider: Option<Provider>,
     explicit_repo: Option<&str>,
 ) -> Result<String, AppError> {
     let cwd = std::env::current_dir()
         .map_err(|_| AppError::context("could not determine the current directory"))?;
     let provider = provider.ok_or(AppError::context(
-        "could not determine a provider; specify --provider",
+        "could not determine a provider; run workctl from the target Git worktree or configure codeProvider/workItemProvider",
     ))?;
     config::resolve_domain_context(provider, explicit_repo, Path::new(&cwd))
 }

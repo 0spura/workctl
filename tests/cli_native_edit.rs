@@ -9,6 +9,12 @@ use std::os::unix::fs::PermissionsExt;
 // Stateful provider fixture: writes change records that subsequent reads and assertions observe.
 fn fixture() -> Fixture {
     let fixture = Fixture::new();
+    fixture.init_git();
+    fs::write(
+        fixture.root.join(".workctl.json"),
+        r#"{"codeProvider":"github","workItemProvider":"github"}"#,
+    )
+    .expect("write GitHub fixture configuration");
     let script = r#"#!/usr/bin/env python3
 import json, os, pathlib, sys
 args = sys.argv[1:]

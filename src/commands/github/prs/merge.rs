@@ -22,11 +22,32 @@ pub(super) fn execute(globals: &GlobalArgs, args: MergeArgs) -> Result<SuccessOu
     // default applies to merges that complete here.
     let delete_branch = (args.delete_branch || defaults.delete_branch) && !args.auto;
     let provider = shared::provider(globals)?;
-    provider.merge(args.number.0, method, delete_branch, args.auto)?;
+    if let Err(error) = provider.merge(args.number.0, method, delete_branch, args.auto) {
+        if error.code != "partial_success" {
+            return Err(error);
+        }
+        let operation = if provider.show(args.number.0).is_ok_and(|pull_request| {
+            matches!(pull_request.state, crate::domain::PullRequestState::Merged)
+        }) {
+            "merged"
+        } else {
+            "updated"
+        };
+        return Err(error.with_partial_event(crate::domain::PartialEvent {
+            resource: "pull_request",
+            number: args.number.0,
+            operation,
+        }));
+    }
+    let confirmed_merged = !args.auto
+        && provider.show(args.number.0).is_ok_and(|pull_request| {
+            matches!(pull_request.state, crate::domain::PullRequestState::Merged)
+        });
     Ok(SuccessOutput::Merge {
         number: args.number.0,
         method: method.map(|method| method.as_str().to_owned()),
         auto: args.auto,
+        confirmed_merged,
     })
 }
 

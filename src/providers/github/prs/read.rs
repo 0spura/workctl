@@ -146,25 +146,23 @@ pub(super) fn checks(
         args.push("--required".to_owned());
     }
     if options.watch {
-        args.push("--watch".to_owned());
-    }
-    if let Some(interval) = options.interval {
-        args.push("--interval".to_owned());
-        args.push(interval.to_string());
-    }
-    if options.fail_fast {
-        args.push("--fail-fast".to_owned());
+        let mut watch_args = args.clone();
+        watch_args.push("--watch".to_owned());
+        if let Some(interval) = options.interval {
+            watch_args.push("--interval".to_owned());
+            watch_args.push(interval.to_string());
+        }
+        if options.fail_fast {
+            watch_args.push("--fail-fast".to_owned());
+        }
+        let timeout = options.watch_timeout.unwrap_or(PR_CHECKS_WATCH_DEADLINE);
+        provider.run_gh_raw_with_deadline(&watch_args, timeout)?;
     }
     args.push("--json".to_owned());
     args.push(CHECK_FIELDS.to_owned());
 
-    // Failing and pending check reports can accompany non-zero exits; parse the payload instead.
-    let output = if options.watch {
-        let timeout = options.watch_timeout.unwrap_or(PR_CHECKS_WATCH_DEADLINE);
-        provider.run_gh_raw_with_deadline(&args, timeout)?
-    } else {
-        provider.run_gh_raw(&args, None)?
-    };
+    // gh forbids combining --watch and --json. Watch first, then fetch the structured result.
+    let output = provider.run_gh_raw(&args, None)?;
     match mapping::check_runs(&output.stdout) {
         Ok(checks) => Ok(checks),
         Err(_) if String::from_utf8_lossy(&output.stderr).contains("no checks reported") => {

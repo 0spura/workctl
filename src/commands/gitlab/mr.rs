@@ -10,10 +10,35 @@ use crate::output::{self, SuccessOutput};
 use crate::providers::gitlab::merge_requests::GitLabMergeRequests;
 
 pub(super) fn execute(globals: &GlobalArgs, args: MergeRequestArgs) -> Result<(), AppError> {
-    let provider = GitLabMergeRequests::new(support::resolve_repo(
-        globals.code_provider,
-        globals.repo.as_deref(),
-    )?)?;
+    let cwd = std::env::current_dir()
+        .map_err(|_| AppError::context("could not determine current directory"))?;
+    let repository = support::resolve_repo(globals.code_provider, globals.repo.as_deref())?;
+    let mut event_endpoints = crate::events::validate_for_cwd(&cwd, "gitlab", Some(&repository))?;
+    let tracking_issue = match &args.action {
+        MergeRequestAction::Create(args) => args.related_issue,
+        _ => None,
+    };
+    let related_issue_references = tracking_issue
+        .map(|number| crate::domain::ClosingReference {
+            repo: Some(repository.clone()),
+            number,
+        })
+        .into_iter()
+        .collect::<Vec<_>>();
+    crate::events::validate_pr_reference_delta(
+        &mut event_endpoints,
+        &repository,
+        None,
+        &related_issue_references,
+        &[],
+    )?;
+    let tracking = crate::events::work_tracking::Invocation::begin(
+        &cwd,
+        "gitlab",
+        &repository,
+        tracking_issue,
+    );
+    let provider = GitLabMergeRequests::new(repository)?;
     if let MergeRequestAction::Note(NoteArgs {
         action: NoteAction::Create(args),
     }) = &args.action
@@ -21,46 +46,65 @@ pub(super) fn execute(globals: &GlobalArgs, args: MergeRequestArgs) -> Result<()
         validate_note(args)?;
     }
     provider.authenticate()?;
-    let result = match args.action {
-        MergeRequestAction::Create(args) => create(&provider, &args)?,
-        MergeRequestAction::List(args) => list(&provider, &args)?,
-        MergeRequestAction::Update(args) => update(&provider, &args)?,
-        MergeRequestAction::View(args) => view(&provider, &args)?,
-        MergeRequestAction::Diff(args) => diff(&provider, &args)?,
-        MergeRequestAction::Checkout(args) => checkout(&provider, &args)?,
-        MergeRequestAction::Close(args) => set_state(&provider, args.number.0, true)?,
-        MergeRequestAction::Reopen(args) => set_state(&provider, args.number.0, false)?,
-        MergeRequestAction::Approve(args) => native_action(&provider, args.number.0, "approve")?,
-        MergeRequestAction::Revoke(args) => native_action(&provider, args.number.0, "revoke")?,
-        MergeRequestAction::Rebase(args) => native_action(&provider, args.number.0, "rebase")?,
-        MergeRequestAction::Subscribe(args) => {
-            native_action(&provider, args.number.0, "subscribe")?
+    let result = (|| -> Result<SuccessOutput, AppError> {
+        let result = match args.action {
+            MergeRequestAction::Create(args) => create(&provider, &args, related_issue_references)?,
+            MergeRequestAction::List(args) => list(&provider, &args)?,
+            MergeRequestAction::Update(args) => update(&provider, &args)?,
+            MergeRequestAction::View(args) => view(&provider, &args)?,
+            MergeRequestAction::Diff(args) => diff(&provider, &args)?,
+            MergeRequestAction::Checkout(args) => checkout(&provider, &args)?,
+            MergeRequestAction::Close(args) => set_state(&provider, args.number.0, true)?,
+            MergeRequestAction::Reopen(args) => set_state(&provider, args.number.0, false)?,
+            MergeRequestAction::Approve(args) => {
+                native_action(&provider, args.number.0, "approve")?
+            }
+            MergeRequestAction::Revoke(args) => native_action(&provider, args.number.0, "revoke")?,
+            MergeRequestAction::Rebase(args) => native_action(&provider, args.number.0, "rebase")?,
+            MergeRequestAction::Subscribe(args) => {
+                native_action(&provider, args.number.0, "subscribe")?
+            }
+            MergeRequestAction::Unsubscribe(args) => {
+                native_action(&provider, args.number.0, "unsubscribe")?
+            }
+            MergeRequestAction::Approvers(args) => {
+                SuccessOutput::GitLabData(crate::output::GitLabData::new(
+                    "approvers",
+                    args.number.0,
+                    provider.related_data("approvers", args.number.0)?,
+                ))
+            }
+            MergeRequestAction::Issues(args) => {
+                SuccessOutput::GitLabData(crate::output::GitLabData::new(
+                    "issues",
+                    args.number.0,
+                    provider.related_data("issues", args.number.0)?,
+                ))
+            }
+            MergeRequestAction::Merge(args) => merge(&provider, &args)?,
+            MergeRequestAction::Todo(args) => native_action(&provider, args.number.0, "todo")?,
+            MergeRequestAction::Note(args) => note(&provider, args.action)?,
+        };
+        Ok(result)
+    })();
+    let result = match result {
+        Ok(result) => result,
+        Err(error) => {
+            tracking.finish(None);
+            crate::events::record_partial(globals, "gitlab", &error, &event_endpoints);
+            return Err(error);
         }
-        MergeRequestAction::Unsubscribe(args) => {
-            native_action(&provider, args.number.0, "unsubscribe")?
-        }
-        MergeRequestAction::Approvers(args) => {
-            SuccessOutput::GitLabData(crate::output::GitLabData::new(
-                "approvers",
-                args.number.0,
-                provider.related_data("approvers", args.number.0)?,
-            ))
-        }
-        MergeRequestAction::Issues(args) => {
-            SuccessOutput::GitLabData(crate::output::GitLabData::new(
-                "issues",
-                args.number.0,
-                provider.related_data("issues", args.number.0)?,
-            ))
-        }
-        MergeRequestAction::Merge(args) => merge(&provider, &args)?,
-        MergeRequestAction::Todo(args) => native_action(&provider, args.number.0, "todo")?,
-        MergeRequestAction::Note(args) => note(&provider, args.action)?,
     };
+    tracking.finish(Some(&result));
+    crate::events::record_success(globals, "gitlab", &result, &event_endpoints);
     output::write(globals.resolved_format, &result)
 }
 
-fn create(provider: &GitLabMergeRequests, args: &CreateArgs) -> Result<SuccessOutput, AppError> {
+fn create(
+    provider: &GitLabMergeRequests,
+    args: &CreateArgs,
+    related_issue_references: Vec<crate::domain::ClosingReference>,
+) -> Result<SuccessOutput, AppError> {
     let description = support::optional_text(
         args.description.as_deref(),
         args.description_file.as_deref(),
@@ -160,6 +204,8 @@ fn create(provider: &GitLabMergeRequests, args: &CreateArgs) -> Result<SuccessOu
             action: crate::output::MutationAction::Created,
             unchanged: false,
             gitlab: true,
+            related_issue_references,
+            removed_related_issue_references: Vec::new(),
         },
     ))
 }
@@ -256,6 +302,8 @@ fn update(provider: &GitLabMergeRequests, args: &UpdateArgs) -> Result<SuccessOu
             action: crate::output::MutationAction::Updated,
             unchanged,
             gitlab: true,
+            related_issue_references: Vec::new(),
+            removed_related_issue_references: Vec::new(),
         },
     ))
 }
@@ -381,12 +429,16 @@ fn merge(provider: &GitLabMergeRequests, args: &MergeArgs) -> Result<SuccessOutp
         options.push("--yes".to_owned());
     }
     provider.merge(&options, args.number.0)?;
+    let confirmed_merged = args.auto_merge != Some(true)
+        && provider.view(args.number.0).is_ok_and(|pull_request| {
+            matches!(pull_request.state, crate::domain::PullRequestState::Merged)
+        });
     Ok(SuccessOutput::GitLabAction {
         number: args.number.0,
-        action: if args.auto_merge == Some(true) {
-            "merge queued".to_owned()
-        } else {
+        action: if confirmed_merged {
             "merged".to_owned()
+        } else {
+            "merge queued".to_owned()
         },
     })
 }

@@ -71,6 +71,28 @@ if [ "$1" = "issue" ] && [ "$2" = "create" ]; then
     fi
     exit 0
 fi
+if [ "$1" = "issue" ] && [ "$2" = "view" ]; then
+    case "$WORKCTL_GH_MODE" in
+        workflow-actions|workflow-merge-confirmed|workflow-merge-unconfirmed)
+            printf '%s\n' '{"labels":[],"assignees":[]}'
+            exit 0
+            ;;
+        workflow-label-applied-then-failed)
+            if [ -f "$(dirname "$WORKCTL_GH_LOG")/workflow-label-applied" ]; then
+                printf '%s\n' '{"labels":[{"name":"triage"}],"assignees":[]}'
+            else
+                printf '%s\n' '{"labels":[],"assignees":[]}'
+            fi
+            exit 0
+            ;;
+    esac
+fi
+if [ "$1" = "issue" ] && [ "$2" = "edit" ] && [ "$WORKCTL_GH_MODE" = "workflow-label-applied-then-failed" ]; then
+    cat > "$WORKCTL_GH_INPUT"
+    : > "$(dirname "$WORKCTL_GH_LOG")/workflow-label-applied"
+    printf '%s\n' 'private provider diagnostic' >&2
+    exit 1
+fi
 if [ "$1" = "issue" ] && [ "$2" = "edit" ]; then
     cat > "$WORKCTL_GH_INPUT"
     exit 0
@@ -91,6 +113,14 @@ if [ "$1" = "project" ] && [ "$2" = "item-edit" ]; then
         printf '%s\n' 'private project diagnostic' >&2
         exit 1
     fi
+    exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "graphql" ] && [ "$WORKCTL_GH_MODE" = "workflow-project-actions" ]; then
+    printf '%s\n' '{"data":{"repositoryOwner":{"projectV2":{"id":"PVT_owner_project","fields":{"nodes":[{"__typename":"ProjectV2Field","id":"NOTES_ID","name":"Notes","dataType":"TEXT"}],"pageInfo":{"hasNextPage":false}},"items":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}'
+    exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "graphql" ] && [ "$WORKCTL_GH_MODE" = "workflow-project-reconciled" ]; then
+    printf '%s\n' '{"data":{"repositoryOwner":{"projectV2":{"id":"PVT_owner_project","fields":{"nodes":[{"__typename":"ProjectV2Field","id":"NOTES_ID","name":"Notes","dataType":"TEXT"}],"pageInfo":{"hasNextPage":false}},"items":{"nodes":[{"content":{"url":"https://github.com/owner/repo/issues/7"},"fieldValues":{"nodes":[{"text":"triaged","field":{"id":"NOTES_ID"}}]}}],"pageInfo":{"hasNextPage":false}}}}}}'
     exit 0
 fi
 if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then
@@ -146,6 +176,14 @@ if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then
     esac
     printf '%s\n' '{"data":{"repositoryOwner":{"projectV2":{"id":"PVT_owner_project","title":"Roadmap","fields":{"nodes":[{"__typename":"ProjectV2SingleSelectField","id":"PRIORITY_ID","name":"Priority","dataType":"SINGLE_SELECT","options":[{"id":"OPTION_HIGH","name":"High"},{"id":"OPTION_LOW","name":"Low"}]},{"__typename":"ProjectV2Field","id":"EFFORT_ID","name":"Effort","dataType":"NUMBER"},{"__typename":"ProjectV2Field","id":"START_ID","name":"Start date","dataType":"DATE"},{"__typename":"ProjectV2Field","id":"NOTES_ID","name":"Notes","dataType":"TEXT"},{"__typename":"ProjectV2IterationField","id":"ITERATION_ID","name":"Iteration","dataType":"ITERATION","configuration":{"iterations":[{"id":"ITERATION_A","title":"Sprint A"}]}}],"pageInfo":{"hasNextPage":false}}}}}}'
     exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/owner/repo/issues/7" ]; then
+    case "$WORKCTL_GH_MODE" in
+        workflow-actions|workflow-comment-failure|workflow-label-applied-then-failed|workflow-project-actions|workflow-project-reconciled|workflow-merge-confirmed|workflow-merge-unconfirmed)
+            printf '%s\n' '{"number":7,"title":"Work item","body":"","state":"OPEN","html_url":"https://github.com/owner/repo/issues/7","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z"}'
+            exit 0
+            ;;
+    esac
 fi
 if [ "$1" = "api" ] && [ "$2" = "--paginate" ]; then
         case "$WORKCTL_GH_MODE" in
@@ -236,12 +274,12 @@ if [ "$1" = "issue" ] && [ "$2" = "develop" ]; then
                 printf 'feat\377x\turl\n'
                 exit 0
             fi
-            printf '%s\n' 'feature-x	https://github.com/owner/repo/tree/feature-x'
-            printf '%s\n' 'feature-y	https://github.com/owner/repo/tree/feature-y'
+            printf '%s\n' '7-feature-x	https://github.com/owner/repo/tree/7-feature-x'
+            printf '%s\n' '7-feature-y	https://github.com/owner/repo/tree/7-feature-y'
             exit 0
             ;;
     esac
-    printf '%s\n' 'github.com/owner/repo/tree/feature-x'
+    printf '%s\n' 'github.com/owner/repo/tree/7-feature-x'
     exit 0
 fi
 if [ "$1" = "issue" ]; then
@@ -249,6 +287,10 @@ if [ "$1" = "issue" ]; then
         close|reopen|comment|lock|unlock)
             if [ "$2" = "comment" ]; then
                 cat > "$WORKCTL_GH_INPUT"
+                if [ "$WORKCTL_GH_MODE" = "workflow-comment-failure" ]; then
+                    printf '%s\n' 'private provider diagnostic' >&2
+                    exit 1
+                fi
             fi
             exit 0
             ;;
@@ -276,6 +318,14 @@ if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
     if [ "$WORKCTL_GH_MODE" = "pr-view-failure" ]; then
         printf '%s\n' 'no pull requests found for branch' >&2
         exit 1
+    fi
+    if [ "$WORKCTL_GH_MODE" = "workflow-merge-confirmed" ]; then
+        printf '%s\n' '{"number":42,"title":"Merged change","body":"PR body","state":"MERGED","isDraft":false,"url":"https://github.com/owner/repo/pull/42","baseRefName":"main","headRefName":"feature-x","author":{"login":"octocat"},"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-02T00:00:00Z","mergedAt":"2026-01-02T00:00:00Z","mergeable":"UNKNOWN","reviewDecision":"","labels":[],"assignees":[]}'
+        exit 0
+    fi
+    if [ "$WORKCTL_GH_MODE" = "workflow-merge-unconfirmed" ]; then
+        printf '%s\n' '{"number":42,"title":"Open change","body":"PR body","state":"OPEN","isDraft":false,"url":"https://github.com/owner/repo/pull/42","baseRefName":"main","headRefName":"feature-x","author":{"login":"octocat"},"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-02T00:00:00Z","mergedAt":"","mergeable":"UNKNOWN","reviewDecision":"","labels":[],"assignees":[]}'
+        exit 0
     fi
     if [ "$WORKCTL_GH_MODE" = "pr-merged" ]; then
         printf '%s\n' '{"number":42,"title":"Merged change","body":"PR body","state":"MERGED","isDraft":false,"url":"https://github.com/owner/repo/pull/42","baseRefName":"main","headRefName":"feature-x","author":{"login":"octocat"},"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-02T00:00:00Z","mergedAt":"2026-01-02T00:00:00Z","mergeable":"UNKNOWN","reviewDecision":"","labels":[],"assignees":[]}'
@@ -316,8 +366,22 @@ if [ "$1" = "pr" ] && [ "$2" = "checks" ]; then
         exec sleep 2
     fi
     if [ "$WORKCTL_GH_MODE" = "checks-watch-pending" ]; then
+        case " $* " in
+            *" --watch "*)
+                printf '%s\n' 'Watching checks...'
+                exit 8
+                ;;
+        esac
         printf '%s\n' '[{"name":"integration","state":"PENDING","bucket":"pending","description":"queued","link":null,"workflow":"CI"}]'
-        exit 8
+        exit 0
+    fi
+    if [ "$WORKCTL_GH_MODE" = "checks-watch-fail-fast" ]; then
+        case " $* " in
+            *" --watch "*)
+                printf '%s\n' 'lint failed'
+                exit 1
+                ;;
+        esac
     fi
     if [ "$WORKCTL_GH_MODE" = "checks-none" ]; then
         printf '%s\n' 'no checks reported' >&2
@@ -417,12 +481,55 @@ if [ "$1" = "label" ] && [ "$2" = "list" ]; then
     fi
     exit 0
 fi
+if [ "$1" = "api" ] && [ "$2" = "--hostname" ] && [ "$4" = "projects/group%2Fsub%2Fproject" ]; then
+    printf '%s\n' '{"default_branch":"main","issue_branch_template":"%{id}-%{title}"}'
+    exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "--hostname" ] && [ "$6" = "projects/group%2Fsub%2Fproject/repository/branches" ]; then
+    case "$5" in
+        POST)
+            if [ "$WORKCTL_GLAB_MODE" = "develop-api-failure" ]; then
+                printf '%s\n' 'private provider diagnostic' >&2
+                exit 1
+            fi
+            if [ "$WORKCTL_GLAB_MODE" = "develop-malformed" ]; then
+                printf '%s\n' 'not-json'
+                exit 0
+            fi
+            case "$*" in
+                *"branch=12-auth-session-expiry"*) printf '%s\n' '{"name":"12-auth-session-expiry"}' ;;
+                *"branch=12-crash-on-startup"*) printf '%s\n' '{"name":"12-crash-on-startup"}' ;;
+                *) printf '%s\n' '{"name":"12-feature-x"}' ;;
+            esac
+            exit 0
+            ;;
+        GET)
+            if [ "$WORKCTL_GLAB_MODE" = "develop-list-failure" ]; then
+                printf '%s\n' 'private provider diagnostic' >&2
+                exit 1
+            fi
+            printf '%s\n' '[{"name":"12-auth-session-expiry"},{"name":"12not-linked"},{"name":"12-second-fix"},{"name":"13-other"}]'
+            exit 0
+            ;;
+    esac
+fi
+if [ "$1" = "api" ] && [ "$2" = "--hostname" ] && case "$6" in */add_spent_time) true ;; *) false ;; esac; then
+    if [ "$WORKCTL_GLAB_MODE" = "write-failure" ]; then
+        printf '%s\n' 'private provider diagnostic' >&2
+        exit 1
+    fi
+    exit 0
+fi
 if [ "$1" = "api" ] && [ "$2" = "--method" ]; then
     if [ "$WORKCTL_GLAB_MODE" = "description-write-failure" ]; then
         printf '%s\n' 'private provider diagnostic' >&2
         exit 1
     fi
     cat > "$WORKCTL_GLAB_INPUT"
+    exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "--hostname" ] && [ "$4" = "projects/group%2Fsub%2Fproject/merge_requests/5/related_issues" ]; then
+    printf '%s\n' '[{"iid":21,"id":2101,"title":"Related issue"}]'
     exit 0
 fi
 if [ "$1" = "mr" ] && [ "$2" = "diff" ]; then
@@ -499,7 +606,19 @@ if [ "$1" = "mr" ] && [ "$2" = "list" ]; then
     exit 0
 fi
 if [ "$1" = "mr" ] && [ "$2" = "view" ]; then
-    if [ "$7" = "6" ]; then
+    if [ "$WORKCTL_GLAB_MODE" = "workflow-merge-read-failure" ]; then
+        printf '%s\n' 'private provider diagnostic' >&2
+        exit 1
+    elif [ "$WORKCTL_GLAB_MODE" = "workflow-merge-malformed" ]; then
+        printf '%s\n' 'not-json'
+        exit 0
+    elif [ "$WORKCTL_GLAB_MODE" = "workflow-merge-confirmed" ] || [ "$WORKCTL_GLAB_MODE" = "workflow-merge-unconfirmed" ]; then
+        state=opened
+        if [ "$WORKCTL_GLAB_MODE" = "workflow-merge-confirmed" ]; then
+            state=merged
+        fi
+        printf '%s\n' "{\"iid\":$7,\"title\":\"Merge outcome\",\"description\":\"Review details\",\"state\":\"$state\",\"draft\":false,\"web_url\":\"https://gitlab.com/group/sub/project/-/merge_requests/$7\",\"target_branch\":\"main\",\"source_branch\":\"feature\",\"author\":{\"username\":\"reviewer\"},\"created_at\":\"2026-01-01T00:00:00Z\",\"updated_at\":\"2026-01-04T00:00:00Z\",\"labels\":[],\"assignees\":[]}"
+    elif [ "$7" = "6" ]; then
         printf '%s\n' '{"iid":6,"title":"Created merge request","description":"Created MR description","state":"opened","draft":true,"web_url":"https://gitlab.com/group/sub/project/-/merge_requests/6","target_branch":"main","source_branch":"feature","author":{"username":"reviewer"},"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-04T00:00:00Z","labels":["backend"],"assignees":[{"username":"reviewer"}]}'
     else
         printf '%s\n' '{"iid":5,"title":"Native merge request","description":"Review details","state":"merged","draft":true,"web_url":"https://gitlab.com/group/sub/project/-/merge_requests/5","target_branch":"main","source_branch":"feature","author":{"username":"reviewer"},"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-04T00:00:00Z","merged_at":"2026-01-04T00:00:00Z","labels":["backend"],"assignees":[{"username":"reviewer"}]}'
@@ -527,6 +646,8 @@ if [ "$1" = "issue" ] && [ "$2" = "create" ]; then
     fi
     if [ "$WORKCTL_GLAB_MODE" = "bad-create-url" ]; then
         printf '%s\n' 'https://gitlab.com/other/project/-/issues/21'
+    elif [ "$WORKCTL_GLAB_MODE" = "work-items-create-url" ]; then
+        printf '%s\n' 'https://gitlab.com/group/sub/project/-/work_items/21'
     else
         printf '%s\n' 'https://gitlab.com/group/sub/project/-/issues/21'
     fi
@@ -537,6 +658,11 @@ if [ "$1" = "issue" ] && [ "$2" = "update" ]; then
         printf '%s\n' 'private provider diagnostic' >&2
         exit 1
     fi
+    case " $* " in
+        *" --label=triage "*)
+            : > "$(dirname "$WORKCTL_GLAB_LOG")/workflow-triage"
+            ;;
+    esac
     exit 0
 fi
 if [ "$1" = "issue" ] && [ "$2" = "view" ]; then
@@ -554,7 +680,13 @@ if [ "$1" = "issue" ] && [ "$2" = "view" ]; then
         fi
         exit 0
     fi
-    if [ "$WORKCTL_GLAB_MODE" = "description-updated" ]; then
+    if [ "$WORKCTL_GLAB_MODE" = "workflow-assignee-delta" ]; then
+        labels='[]'
+        if [ -f "$(dirname "$WORKCTL_GLAB_LOG")/workflow-triage" ]; then
+            labels='["triage"]'
+        fi
+        printf '%s\n' "{\"iid\":21,\"title\":\"Created issue\",\"description\":\"Created description\",\"state\":\"opened\",\"web_url\":\"https://gitlab.com/group/sub/project/-/issues/21\",\"created_at\":\"2026-01-02T03:04:05.000Z\",\"updated_at\":\"2026-01-03T04:05:06.000Z\",\"labels\":$labels,\"assignees\":[{\"username\":\"alice\"}]}"
+    elif [ "$WORKCTL_GLAB_MODE" = "description-updated" ]; then
         printf '%s\n' '{"iid":12,"title":"Updated title","description":"Replacement\nwith exact bytes\n","state":"opened","web_url":"https://gitlab.com/group/sub/project/-/issues/12","created_at":"2026-01-02T03:04:05.000Z","updated_at":"2026-01-04T04:05:06.000Z"}'
     elif [ "$7" = "21" ]; then
         printf '%s\n' '{"iid":21,"title":"Created issue","description":"Created description","state":"opened","web_url":"https://gitlab.com/group/sub/project/-/issues/21","created_at":"2026-01-02T03:04:05.000Z","updated_at":"2026-01-03T04:05:06.000Z"}'
@@ -628,8 +760,73 @@ exit 64
             .expect("run workctl binary")
     }
 
-    /// Base command pointed at the isolated provider fixtures and the fixture worktree.
+    /// Maps fixture-only provider selectors to project config before invoking the real CLI.
     fn command(&self, args: &[&str], mode: &str) -> Command {
+        let mut cli_args = Vec::with_capacity(args.len());
+        let mut code_provider = None;
+        let mut work_item_provider = None;
+        let mut index = 0;
+        while index < args.len() {
+            let target = match args[index] {
+                "--provider" => Some((true, true)),
+                "--code-provider" => Some((true, false)),
+                "--work-item-provider" => Some((false, true)),
+                _ => None,
+            };
+            if let Some((set_code, set_work_item)) = target
+                && let Some(value) = args.get(index + 1).copied()
+                && matches!(value, "github" | "gitlab")
+            {
+                if set_code {
+                    code_provider = Some(value);
+                }
+                if set_work_item {
+                    work_item_provider = Some(value);
+                }
+                index += 2;
+                continue;
+            }
+            cli_args.push(args[index]);
+            index += 1;
+        }
+        if code_provider.is_some() || work_item_provider.is_some() {
+            self.init_git();
+            let path = self.root.join(".workctl.local.json");
+            let mut config = fs::read(&path)
+                .ok()
+                .and_then(|contents| serde_json::from_slice::<Value>(&contents).ok())
+                .unwrap_or_else(|| serde_json::json!({}));
+            if let Some(object) = config.as_object_mut() {
+                if let Some(provider) = code_provider {
+                    object.insert(
+                        "codeProvider".to_owned(),
+                        Value::String(provider.to_owned()),
+                    );
+                }
+                if let Some(provider) = work_item_provider {
+                    object.insert(
+                        "workItemProvider".to_owned(),
+                        Value::String(provider.to_owned()),
+                    );
+                }
+                fs::write(
+                    path,
+                    serde_json::to_vec(&config).expect("serialize fixture provider config"),
+                )
+                .expect("write fixture provider config");
+            }
+        }
+        self.command_raw(&cli_args, mode)
+    }
+
+    /// Runs exactly the supplied arguments, for tests of the public parser.
+    pub fn run_raw(&self, args: &[&str], mode: &str) -> Output {
+        self.command_raw(args, mode)
+            .output()
+            .expect("run workctl binary")
+    }
+
+    fn command_raw(&self, args: &[&str], mode: &str) -> Command {
         let mut paths = vec![self.bin.clone()];
         paths.extend(std::env::split_paths(
             &std::env::var_os("PATH").unwrap_or_default(),
@@ -648,6 +845,24 @@ exit 64
             .env("WORKCTL_GLAB_INPUT", &self.glab_input)
             .env("WORKCTL_GLAB_MODE", mode);
         command
+    }
+
+    /// Runs with isolated platform config/state directories for event and workflow tests.
+    pub fn run_with_event_dirs(
+        &self,
+        args: &[&str],
+        mode: &str,
+        home: &std::path::Path,
+        config: &std::path::Path,
+        state: &std::path::Path,
+    ) -> Output {
+        self.command(args, mode)
+            .env("HOME", home)
+            .env("XDG_CONFIG_HOME", config)
+            .env("XDG_STATE_HOME", state)
+            .env("LOCALAPPDATA", config)
+            .output()
+            .expect("run workctl binary")
     }
 
     pub fn run_issue(&self, args: &[&str], mode: &str) -> Output {

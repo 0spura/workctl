@@ -1,3 +1,4 @@
+mod develop;
 mod mapping;
 mod read;
 mod write;
@@ -138,6 +139,20 @@ impl GitLabIssues {
         write::update(self, number, patch)
     }
 
+    pub fn develop_branch(
+        &self,
+        number: u64,
+        base: Option<&str>,
+        name: Option<&str>,
+        checkout: bool,
+    ) -> Result<String, AppError> {
+        develop::create(self, number, base, name, checkout)
+    }
+
+    pub fn linked_branches(&self, number: u64) -> Result<Vec<String>, AppError> {
+        develop::list(self, number)
+    }
+
     pub(super) fn run_glab(&self, args: &[String]) -> Result<Vec<u8>, AppError> {
         super::run_glab(args)
     }
@@ -171,6 +186,8 @@ impl GitLabIssues {
             endpoint,
             "--hostname".to_owned(),
             self.host.clone(),
+            "--header".to_owned(),
+            "Content-Type: application/json".to_owned(),
             "--input".to_owned(),
             "-".to_owned(),
         ];
@@ -196,6 +213,8 @@ impl GitLabIssues {
             endpoint,
             "--hostname".to_owned(),
             self.host.clone(),
+            "--header".to_owned(),
+            "Content-Type: application/json".to_owned(),
             "--input".to_owned(),
             "-".to_owned(),
         ];

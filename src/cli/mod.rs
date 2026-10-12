@@ -1,25 +1,23 @@
 pub mod common;
 pub mod github;
 pub mod gitlab;
+pub mod workflow;
 
 use std::ffi::OsString;
 
+use crate::config::{Provider, ProviderSelection};
 use clap::{ArgMatches, Args, Command, FromArgMatches, Subcommand};
 
-use crate::config::{Provider, ProviderSelection};
-
-/// Provider flags remain command-global; each command resolves them in its owning domain.
+/// The selected providers are injected after offline worktree/config resolution.
 #[derive(Debug, Clone, Args)]
 pub struct GlobalArgs {
-    /// Legacy provider selector; applies to code and work-item commands
-    #[arg(long, global = true, value_enum)]
-    pub provider: Option<Provider>,
-    /// Code-host provider; defaults to codeProvider or the Git origin host
-    #[arg(long = "code-provider", global = true, value_enum)]
+    #[arg(skip)]
     pub code_provider: Option<Provider>,
-    /// Work-item provider; defaults to workItemProvider or the Git origin host
-    #[arg(long = "work-item-provider", global = true, value_enum)]
+    #[arg(skip)]
     pub work_item_provider: Option<Provider>,
+    /// Local Git worktree that supplies provider, repository, and project configuration
+    #[arg(long, global = true, value_name = "PATH")]
+    pub repo_path: Option<std::path::PathBuf>,
     /// Repository for the selected command's provider scope
     #[arg(long, short = 'R', global = true, value_name = "REPO")]
     pub repo: Option<String>,
@@ -43,6 +41,7 @@ pub enum OutputFormat {
 pub enum ActiveCommand {
     Github(github::GithubCommand),
     Gitlab(gitlab::GitlabCommand),
+    Workflow(workflow::WorkflowAction),
 }
 
 impl ActiveCommand {
@@ -50,19 +49,29 @@ impl ActiveCommand {
         providers: ProviderSelection,
         matches: &ArgMatches,
     ) -> Result<Self, clap::Error> {
-        match matches.subcommand_name() {
-            Some("issue") if providers.work_items == Provider::Github => Ok(Self::Github(
+        match (
+            matches.subcommand_name(),
+            providers.work_items,
+            providers.code,
+        ) {
+            (Some("issue"), Some(Provider::Github), _) => Ok(Self::Github(
                 github::GithubCommand::from_arg_matches(matches)?,
             )),
-            Some("issue") if providers.work_items == Provider::Gitlab => Ok(Self::Gitlab(
+            (Some("issue"), Some(Provider::Gitlab), _) => Ok(Self::Gitlab(
                 gitlab::GitlabCommand::from_arg_matches(matches)?,
             )),
-            Some("pr") if providers.code == Provider::Github => Ok(Self::Github(
+            (Some("pr"), _, Some(Provider::Github)) => Ok(Self::Github(
                 github::GithubCommand::from_arg_matches(matches)?,
             )),
-            Some("mr") if providers.code == Provider::Gitlab => Ok(Self::Gitlab(
+            (Some("mr"), _, Some(Provider::Gitlab)) => Ok(Self::Gitlab(
                 gitlab::GitlabCommand::from_arg_matches(matches)?,
             )),
+            (Some("workflow"), _, _) => {
+                let (_, workflow_matches) = matches.subcommand().expect("workflow subcommand");
+                Ok(Self::Workflow(workflow::WorkflowAction::from_arg_matches(
+                    workflow_matches,
+                )?))
+            }
             _ => Err(clap::Error::raw(
                 clap::error::ErrorKind::InvalidSubcommand,
                 "command does not belong to the selected provider",
@@ -80,24 +89,27 @@ pub fn command_tree(providers: ProviderSelection) -> Command {
         github::GithubCommand::augment_subcommands(Command::new("provider-template"));
     let gitlab_commands =
         gitlab::GitlabCommand::augment_subcommands(Command::new("provider-template"));
-    let issue = match providers.work_items {
+    let issue = match providers.work_items.unwrap_or(Provider::Github) {
         Provider::Github => subcommand(&github_commands, "issue"),
         Provider::Gitlab => subcommand(&gitlab_commands, "issue"),
     };
     root = root.subcommand(issue);
-    let code = match providers.code {
+    let code = match providers.code.unwrap_or(Provider::Github) {
         Provider::Github => subcommand(&github_commands, "pr"),
         Provider::Gitlab => subcommand(&gitlab_commands, "mr"),
     };
     root = root.subcommand(code);
+    root = root.subcommand(workflow::WorkflowAction::augment_subcommands(Command::new(
+        "workflow",
+    )));
     root.version(env!("CARGO_PKG_VERSION"))
         .about("Manage work items and code-host requests")
         .after_help(
             "Provider resolution happens before command parsing:\n\
-             1. `--code-provider` and `--work-item-provider` override their respective domains.\n\
-             2. Legacy `--provider` applies to both domains unless a domain-specific flag is supplied.\n\
-             3. `.workctl.json` and `.workctl.local.json` domain-specific settings override legacy `provider`.\n\
-             4. The Git origin host is the final fallback.\n\
+             1. `.workctl.json` and `.workctl.local.json` domain-specific settings select providers.\n\
+             2. Otherwise, the selected target worktree's Git origin host selects the provider.\n\
+             Run workctl from the target project's Git worktree, or use `--repo-path PATH` to select a local target worktree and its configuration.\n\
+             `--repo` overrides only the remote repository scope within the selected provider.\n\
              `issue` follows the work-item provider; `pr`/`mr` follows the code-host provider.",
         )
 }
@@ -110,16 +122,17 @@ fn subcommand(command: &Command, name: &str) -> Command {
         .clone()
 }
 
-/// Reads the last value of a global flag from the raw arguments, before parsing.
+/// Reads a global value from raw arguments before parsing, for error-format preservation.
 ///
-/// The grammar depends on the provider, so `--provider` has to be read without a command tree.
-/// Argument values never start with `--`, and `--` ends the scan.
+/// `--format` can be read without a provider-specific command tree.
 pub fn prescan_value(argv: &[OsString], name: &str) -> Option<String> {
     let prefix = format!("{name}=");
     let mut found = None;
     let mut tokens = argv.iter().skip(1);
     while let Some(token) = tokens.next() {
-        let token = token.to_str()?;
+        let Some(token) = token.to_str() else {
+            continue;
+        };
         if token == "--" {
             break;
         }
@@ -133,4 +146,24 @@ pub fn prescan_value(argv: &[OsString], name: &str) -> Option<String> {
         }
     }
     found
+}
+/// Reads a global local-path value before provider-specific grammar parsing.
+pub fn prescan_path(argv: &[OsString], name: &str) -> Option<std::path::PathBuf> {
+    let prefix = format!("{name}=");
+    let mut tokens = argv.iter().skip(1);
+    while let Some(token) = tokens.next() {
+        if token == "--" {
+            break;
+        }
+        if let Some(value) = token.as_encoded_bytes().strip_prefix(prefix.as_bytes()) {
+            // SAFETY: the bytes come from this OsStr, split immediately after an ASCII `=`,
+            // which is an encoded-character boundary on every supported platform.
+            let value = unsafe { std::ffi::OsStr::from_encoded_bytes_unchecked(value) };
+            return Some(std::path::PathBuf::from(value));
+        }
+        if token == name {
+            return tokens.next().map(std::path::PathBuf::from);
+        }
+    }
+    None
 }

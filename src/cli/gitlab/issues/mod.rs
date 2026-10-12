@@ -5,6 +5,7 @@ mod state;
 mod update;
 mod view;
 
+pub use crate::cli::common::IssueDevelopArgs as DevelopArgs;
 pub use create::CreateArgs;
 pub use list::ListArgs;
 pub use state::StateArgs;
@@ -46,6 +47,8 @@ pub enum IssueAction {
     Subscribe(StateArgs),
     /// Unsubscribe from an issue
     Unsubscribe(StateArgs),
+    /// Create or list the branches linked to an issue
+    Develop(DevelopArgs),
     /// Add a note to an issue
     Note(NoteArgs),
 }

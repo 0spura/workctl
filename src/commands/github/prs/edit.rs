@@ -32,6 +32,8 @@ pub(super) fn execute(globals: &GlobalArgs, args: EditArgs) -> Result<SuccessOut
             "the same closing reference cannot be added and removed",
         ));
     }
+    let related_issue_references = args.closes.clone();
+    let removed_related_issue_references = args.remove_closes.clone();
     let patch = PrPatch {
         title: args.title,
         body: change,
@@ -65,13 +67,63 @@ pub(super) fn execute(globals: &GlobalArgs, args: EditArgs) -> Result<SuccessOut
         Some(_) => crate::output::MutationAction::Reopened,
         None => crate::output::MutationAction::Updated,
     };
-    let (pull_request, unchanged) = provider.edit(args.number.0, &patch, transition.as_ref())?;
+    let (pull_request, unchanged) = match provider.edit(args.number.0, &patch, transition.as_ref())
+    {
+        Ok(result) => result,
+        Err(mut error) => {
+            if error.code == "partial_success"
+                && error.details.as_ref().is_some_and(|details| {
+                    details
+                        .get("completed")
+                        .and_then(serde_json::Value::as_array)
+                        .is_some_and(|completed| {
+                            completed
+                                .iter()
+                                .any(|step| step.as_str() == Some("pull request edit"))
+                        })
+                })
+            {
+                if let Some(details) = error
+                    .details
+                    .as_mut()
+                    .and_then(serde_json::Value::as_object_mut)
+                {
+                    details.insert(
+                        "relatedIssueReferences".to_owned(),
+                        serde_json::json!(
+                            related_issue_references
+                                .iter()
+                                .map(ToString::to_string)
+                                .collect::<Vec<_>>()
+                        ),
+                    );
+                    details.insert(
+                        "removedRelatedIssueReferences".to_owned(),
+                        serde_json::json!(
+                            removed_related_issue_references
+                                .iter()
+                                .map(ToString::to_string)
+                                .collect::<Vec<_>>()
+                        ),
+                    );
+                    error.partial_event = Some(crate::domain::PartialEvent {
+                        resource: "pull_request",
+                        number: args.number.0,
+                        operation: "updated",
+                    });
+                }
+            }
+            return Err(error);
+        }
+    };
     Ok(SuccessOutput::PullRequestMutation(
         crate::output::PullRequestMutation {
             pull_request,
             action,
             unchanged,
             gitlab: false,
+            related_issue_references,
+            removed_related_issue_references,
         },
     ))
 }

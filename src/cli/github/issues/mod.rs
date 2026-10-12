@@ -1,17 +1,15 @@
 mod blockers;
 mod comment;
 mod create;
-mod develop;
 mod edit;
 mod list;
 mod lock;
 mod references;
 mod view;
-
+pub use crate::cli::common::IssueDevelopArgs as DevelopArgs;
 pub use blockers::BlockersArgs;
 pub use comment::CommentArgs;
 pub use create::CreateArgs;
-pub use develop::DevelopArgs;
 pub use edit::EditArgs;
 pub use list::ListArgs;
 pub use lock::LockArgs;
