@@ -7,6 +7,7 @@ mod events;
 mod output;
 mod process;
 mod providers;
+mod update;
 
 use std::ffi::OsString;
 use std::path::Path;
@@ -54,6 +55,17 @@ fn main() -> ExitCode {
         }
     };
     globals.resolved_format = format;
+    if matches.subcommand_name() == Some("update") {
+        return match update::check()
+            .and_then(|status| output::write(format, &output::SuccessOutput::UpdateStatus(status)))
+        {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                output::error::write(format, &error);
+                ExitCode::FAILURE
+            }
+        };
+    }
     let missing_provider = match matches.subcommand_name() {
         Some("issue") => providers.work_items.is_none(),
         Some("pr" | "mr") => providers.code.is_none(),
@@ -74,7 +86,18 @@ fn main() -> ExitCode {
     };
 
     match commands::execute(globals, command) {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(()) => {
+            if let Some(status) = update::check_if_due() {
+                if status.update_available {
+                    eprintln!(
+                        "workctl update available ({} → {}); run `cargo install --git https://github.com/0spura/workctl --locked --force`",
+                        &status.current[..7],
+                        &status.latest[..7]
+                    );
+                }
+            }
+            ExitCode::SUCCESS
+        }
         Err(error) => {
             output::error::write(format, &error);
             ExitCode::FAILURE

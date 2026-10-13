@@ -14,6 +14,7 @@
 > Grammar-selection decision: [ADR-0017](./adr/0017-provider-selected-cli-grammar.md), superseding ADR-0016's single-surface premise and `--provider` as a grammar selector.
 > Provider-selector removal and worktree-scoped autodetection: [ADR-0046](./adr/0046-remove-provider-selection-cli-flags.md), superseding provider-selection CLI and generic `provider` config fallback in ADR-0017.
 > Local target-worktree context via `--repo-path`: [ADR-0047](./adr/0047-local-target-worktree-repo-path.md), extending the worktree boundary in ADR-0046.
+> Update checks: [ADR-0048](./adr/0048-workctl-update-check.md).
 > GitHub Project fields and issue defaults: [ADR-0018](./adr/0018-github-project-dynamic-fields.md), with automatic field selection added by [ADR-0019](./adr/0019-decision-model-project-field-selection.md).
 > GitHub issue relationship reads: [ADR-0023](./adr/0023-github-issue-view-relationships.md).
 > Read-only PR status evidence: [ADR-0028](./adr/0028-read-only-pr-status-evidence.md).
@@ -36,7 +37,9 @@ Modules are grouped by ownership and reason to change. A module can grow while i
 
 ```text
 src/
-  main.rs                     provider selection, bootstrap, error-to-exit mapping only
+  main.rs                     provider selection, bootstrap, dispatch, and update notice
+  update.rs                   bounded GitHub latest-commit check and 24-hour local notice cache
+  build.rs                    embeds the source revision for update comparisons
   cli/
     mod.rs                    neutral root command, global flags, and grammar selection
     common.rs                 shared body-change flags, number and limit parsing, and nonblank value parser
@@ -198,6 +201,10 @@ GitLab has its own grammar and adapter rather than extending the GitHub one. Git
    GitLab `mr issues` reads `GET /projects/:id/merge_requests/:merge_request_iid/related_issues`; this lists issues referenced by MR content, not only issues closed on merge (`closes_issues`). The API may omit `references`, so text output falls back to `#IID`.
 9. Typed results carry mutation outcomes separately from their unchanged JSON resources. `output` emits compact text by default or explicit JSON. Errors use the selected format on stderr and a nonzero exit; partial-success text retains identities and completed/pending operations without resource dumps.
 10. For a confirmed mutating command, the command layer constructs one domain event per target and commits it to the local outbox. The dispatcher attempts opted-in endpoint deliveries before the CLI returns, under one aggregate one-second deadline. Reads and true no-ops do not emit mutation events. Delivery errors never rewrite the provider result; enqueue failures produce a safe warning.
+
+## Update checks
+
+`workctl update` and the periodic notice query the fixed GitHub Git-reference API for `0spura/workctl`'s `main` revision and compare it with the Git SHA embedded by `build.rs`. The explicit command returns a safe error on request/response failure; automatic checks run after successful ordinary commands and are best-effort. The platform cache normally limits automatic checks to once per 24 hours; if cache reads or writes fail, the next command may retry. The request has a five-second timeout, refuses redirects, and sends no GitHub credentials. An available update prints only to stderr after ordinary command output; workctl reports the Cargo install command and never installs code itself.
 
 ## Proposed private semantic declarations
 

@@ -196,6 +196,7 @@ pub enum SuccessOutput {
         id: String,
         state: String,
     },
+    UpdateStatus(crate::update::UpdateStatus),
 }
 
 pub fn write(format: OutputFormat, output: &SuccessOutput) -> Result<(), AppError> {

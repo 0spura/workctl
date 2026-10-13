@@ -102,6 +102,7 @@ pub fn command_tree(providers: ProviderSelection) -> Command {
     root = root.subcommand(workflow::WorkflowAction::augment_subcommands(Command::new(
         "workflow",
     )));
+    root = root.subcommand(Command::new("update").about("Check for workctl updates"));
     root.version(env!("CARGO_PKG_VERSION"))
         .about("Manage work items and code-host requests")
         .after_help(

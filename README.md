@@ -23,6 +23,12 @@ workctl --version
 Cargo puts the binary in `$CARGO_HOME/bin`; keep it on `PATH`. From a clone: `cargo build --release`
 then `cargo test` and `./target/release/workctl --help`.
 
+`workctl update` checks the latest Git revision. Successful commands also check at most once per day
+when the local cache is available; cache failures are silent and may cause a retry next time.
+Update notices go to stderr. The suggested reinstall command includes `--force` because Git installs
+keep the same package version. Checks use GitHub's public API; failures are silent for ordinary
+commands. Updates are never installed automatically.
+
 ## Issues
 
 ```sh

@@ -23,6 +23,18 @@ Actors: a developer or coding agent running `workctl` locally. Observable behavi
 
 **Acceptance:** The selected project provider determines issue grammar, including `develop` on GitHub and GitLab; each command executes through its owning provider. Running workctl from another Git worktree or selecting one with `--repo-path` uses that repository's config and origin. Relative target paths resolve from the original caller directory. Invalid target paths fail before provider access. `--repo` overrides remote scope only within the target provider. Removed provider flags and the generic `provider` config key are rejected, with no compatibility alias. An unknown command produces a structured JSON error on stderr and a nonzero exit; unsupported verbs/flags are usage errors. Unsupported or unresolved provider context fails before provider access. No flag in subcommand help is printed without a description, and `workctl issue edit --help` documents `patch_conflict` and exact-context matching.
 
+### RF-CLI.2: Check for workctl updates
+**Priority:** Must Have | **Status:** Implemented | **Dependencies:** none
+
+- The explicit `workctl update` command checks the latest commit on the canonical `main` branch of `0spura/workctl` and compares it with the revision embedded at build time.
+- A successful check reports current/latest revisions and whether an update is available in the selected output format. A newer commit includes the Cargo installation command.
+- After successful ordinary commands, workctl checks at most once per 24 hours when its cache is available. A cache read/write failure is silent and may cause the next command to retry. When a newer commit exists, it prints a concise notice to stderr without changing command stdout or JSON.
+- Automatic check failures and cache failures do not change the invoked command's result. Explicit check failures return a safe error without network diagnostics.
+- Checks use the fixed GitHub HTTPS API endpoint, with a bounded timeout and no redirects. The checker never downloads or installs code.
+
+**Acceptance:** `workctl update` distinguishes an installed revision from the latest commit and reports the Cargo install command only when an update exists. Ordinary successful commands preserve their output and show a stderr notice only when an update is available. Network, invalid response, unavailable build revision, and cache failures never leak diagnostics or fail ordinary commands.
+**Verification:** Revision comparison tests and CLI smoke checks for explicit success/failure and quiet automatic-check failure.
+
 ### RF-WI.1: Create an issue
 **Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-CFG.1, RF-PRV.1
 
