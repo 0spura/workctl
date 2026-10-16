@@ -21,6 +21,9 @@ pub fn write_error(error: &AppError) {
     if let Some(details) = &error.details {
         value["details"] = details.clone();
     }
+    if let Some(cause) = &error.cause {
+        value["cause"] = serde_json::Value::from(cause.as_str());
+    }
     let _ = serde_json::to_writer(&mut stderr, &value);
     let _ = stderr.write_all(b"\n");
 }

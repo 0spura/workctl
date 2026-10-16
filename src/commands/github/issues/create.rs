@@ -22,6 +22,8 @@ pub(super) fn execute(globals: &GlobalArgs, args: CreateArgs) -> Result<SuccessO
     explicit_labels.retain(|label| label != "@auto");
     let repo = support::resolve_repo(globals.work_item_provider, globals.repo.as_deref())?;
     let defaults = support::github_issue_defaults(&repo)?;
+    let blocked_by = super::edit::relation_arguments(args.blocked_by, &repo);
+    let blocking = super::edit::relation_arguments(args.blocking, &repo);
     let mut assignees = args.assignees;
     if assignees.is_empty() {
         assignees = defaults
@@ -150,6 +152,11 @@ pub(super) fn execute(globals: &GlobalArgs, args: CreateArgs) -> Result<SuccessO
         labels,
         milestone: args.milestone,
         projects: args.projects,
+        parent: args
+            .parent
+            .map(crate::cli::github::issues::IssueReference::into_argument),
+        blocked_by,
+        blocking,
         attachments: args.attachments,
     };
     let created = match project_plan.as_ref() {

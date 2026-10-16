@@ -21,7 +21,7 @@ pub(super) fn run_glab_with_input(
 ) -> Result<Vec<u8>, AppError> {
     let output = runner::run("glab", args, input, None).map_err(map_process_error)?;
     if !output.success {
-        return Err(AppError::gitlab_cli());
+        return Err(AppError::gitlab_cli().with_stderr(&output.stderr));
     }
     Ok(output.stdout)
 }

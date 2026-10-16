@@ -373,14 +373,15 @@ Text output escapes terminal control characters in provider strings while preser
 | `--expect-updated-at` differs from the fetched issue or pull request | `conflict` JSON error; no write | Re-read with `issue view`/`pr view` and retry with the returned `updated_at` |
 | A number given to a pull request command is not a pull request | `not_pull_request` JSON error; no write | Use a pull request number, or the `issue` group for issues |
 | An issue command is given a pull request number | `not_issue` JSON error; no write | Use the issue number, or the `pr` group for pull requests |
-| GitHub command failure | Generic `github_cli` JSON error; raw stderr withheld | Check `gh` authentication/permissions and retry |
+| GitHub command failure | `github_cli` error carrying a sanitized `cause` (first stderr line, ≤300 chars, credentials redacted, controls escaped); remaining stderr withheld | Act on the cause, or check `gh` authentication/permissions and retry |
 | Conversation command with a missing/blank comment body, an unsupported `--reason`, or both body sources | `invalid_input` or clap usage error; no `gh` call | Supply one body source and a reason `gh` accepts |
 | `pr revert` succeeds but prints no readable pull-request URL | `provider_response` JSON error; the revert may exist | Check GitHub for the revert pull request before retrying |
 | Project membership/field update fails after issue creation | Generic `partial_success` with the created resource and completed/pending operations; no automatic retry | Inspect the resource and resume only the pending operations |
-| GitLab command failure | Generic `gitlab_cli` JSON error; raw stderr withheld | Check `glab` authentication/permissions and retry |
+| GitLab command failure | `gitlab_cli` error carrying a sanitized `cause` as for GitHub; remaining stderr withheld | Act on the cause, or check `glab` authentication/permissions and retry |
 | GitLab issue or MR write fails or cannot be confirmed | `gitlab_write_uncertain`; the remote resource may exist or have changed | Inspect GitLab before retrying |
 | Non-write child timeout/output cap exceeded | `timeout`/`output_limit` JSON error | Retry after resolving remote/tool issue |
 | Malformed provider response | `provider_response` JSON error | Report provider contract mismatch |
+| Command-line usage error | `invalid_input` with `cause` naming the rejected argument (first line of clap's message); exit 2 | Fix the argument and retry |
 
 ## Verification strategy
 

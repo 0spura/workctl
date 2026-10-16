@@ -29,6 +29,9 @@ pub struct NewIssue {
     pub labels: Vec<String>,
     pub milestone: Option<String>,
     pub projects: Vec<String>,
+    pub parent: Option<String>,
+    pub blocked_by: Vec<String>,
+    pub blocking: Vec<String>,
     pub attachments: Vec<String>,
 }
 

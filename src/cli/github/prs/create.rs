@@ -9,7 +9,7 @@ pub struct CreateArgs {
     #[arg(long, short = 't', value_parser = common::parse_non_blank)]
     pub title: String,
     /// Pull request body text
-    #[arg(long, short = 'b')]
+    #[arg(long, short = 'b', allow_hyphen_values = true)]
     pub body: Option<String>,
     /// Read the body from a file; `-` reads standard input
     #[arg(long = "body-file", short = 'F', value_name = "FILE")]

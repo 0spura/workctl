@@ -21,13 +21,13 @@ impl LifecycleState {
 #[derive(Debug, Args)]
 pub struct BodyChangeArgs {
     /// Replace the whole body with this text
-    #[arg(long, short = 'b')]
+    #[arg(long, short = 'b', allow_hyphen_values = true)]
     pub body: Option<String>,
     /// Replace the whole body with a file's contents; `-` reads standard input
     #[arg(long = "body-file", short = 'F', value_name = "FILE")]
     pub body_file: Option<String>,
     /// Append this text as a new block
-    #[arg(long = "append-body")]
+    #[arg(long = "append-body", allow_hyphen_values = true)]
     pub append_body: Option<String>,
     /// Append a file's contents as a new block; `-` reads standard input
     #[arg(long = "append-body-file", value_name = "FILE")]
@@ -36,7 +36,7 @@ pub struct BodyChangeArgs {
     #[arg(long = "replace-section", value_name = "HEADING")]
     pub replace_section: Option<String>,
     /// New section content; requires --replace-section
-    #[arg(long = "section-body")]
+    #[arg(long = "section-body", allow_hyphen_values = true)]
     pub section_body: Option<String>,
     /// New section content from a file; requires --replace-section
     #[arg(long = "section-body-file", value_name = "FILE")]

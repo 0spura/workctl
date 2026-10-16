@@ -68,7 +68,7 @@ pub(super) fn show(provider: &GitHubPulls, number: u64) -> Result<PullRequest, A
     ];
     let output = provider.run_gh_raw(&args, None)?;
     if !output.success {
-        return Err(AppError::not_pull_request());
+        return Err(AppError::not_pull_request().with_stderr(&output.stderr));
     }
     mapping::pull_request(&output.stdout)
 }
@@ -88,7 +88,7 @@ pub(super) fn status(
     ];
     let output = provider.run_gh_raw(&args, None)?;
     if !output.success {
-        return Err(AppError::not_pull_request());
+        return Err(AppError::not_pull_request().with_stderr(&output.stderr));
     }
     mapping::pull_request_status(&output.stdout)
 }
@@ -106,7 +106,7 @@ pub(super) fn head_sha(provider: &GitHubPulls, number: u64) -> Result<String, Ap
     ];
     let output = provider.run_gh_raw(&args, None)?;
     if !output.success {
-        return Err(AppError::not_pull_request());
+        return Err(AppError::not_pull_request().with_stderr(&output.stderr));
     }
     mapping::head_sha(&output.stdout)
 }
@@ -165,9 +165,13 @@ pub(super) fn checks(
     let output = provider.run_gh_raw(&args, None)?;
     match mapping::check_runs(&output.stdout) {
         Ok(checks) => Ok(checks),
-        Err(_) if String::from_utf8_lossy(&output.stderr).contains("no checks reported") => {
-            Ok(Vec::new())
-        }
-        Err(_) => Err(AppError::github_cli()),
+        Err(_) if is_no_checks(&output.stderr) => Ok(Vec::new()),
+        Err(_) => Err(AppError::github_cli().with_stderr(&output.stderr)),
     }
+}
+
+/// `gh pr checks` exits non-zero with this notice when nothing is reported, e.g. a branch with no
+/// branch protection yields "no required checks reported" under `--required`.
+fn is_no_checks(stderr: &[u8]) -> bool {
+    String::from_utf8_lossy(stderr).contains("checks reported")
 }

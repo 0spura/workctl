@@ -9,7 +9,7 @@ use crate::process::runner::{self, ProcessError};
 pub(super) fn run_gh(args: &[String], input: Option<Vec<u8>>) -> Result<Vec<u8>, AppError> {
     let output = run_gh_raw(args, input)?;
     if !output.success {
-        return Err(AppError::github_cli());
+        return Err(AppError::github_cli().with_stderr(&output.stderr));
     }
     Ok(output.stdout)
 }

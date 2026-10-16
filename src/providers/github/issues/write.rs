@@ -26,6 +26,11 @@ pub(super) fn create(
     if let Some(milestone) = milestone {
         args.extend(["--milestone".to_owned(), milestone]);
     }
+    if let Some(parent) = &issue.parent {
+        args.extend(["--parent".to_owned(), parent.clone()]);
+    }
+    push_repeated(&mut args, "--blocked-by", &issue.blocked_by);
+    push_repeated(&mut args, "--blocking", &issue.blocking);
     if project_plan.is_none() {
         push_repeated(&mut args, "--project", &issue.projects);
     }

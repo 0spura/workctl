@@ -20,6 +20,10 @@ pub fn write(format: OutputFormat, error: &AppError) {
 fn write_to(writer: &mut impl Write, error: &AppError) -> Result<(), AppError> {
     write!(writer, "{}: ", error.code).map_err(|_| AppError::output())?;
     write_safe(writer, error.message, false)?;
+    if let Some(cause) = &error.cause {
+        write!(writer, ": ").map_err(|_| AppError::output())?;
+        write_safe(writer, cause, false)?;
+    }
     if let Some(details) = error
         .details
         .as_ref()

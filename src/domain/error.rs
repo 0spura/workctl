@@ -3,6 +3,8 @@ pub struct AppError {
     pub code: &'static str,
     pub message: &'static str,
     pub details: Option<serde_json::Value>,
+    /// Sanitized, bounded first line of a failing CLI's stderr, so the caller can act on it.
+    pub cause: Option<String>,
     pub(crate) partial_event: Option<PartialEvent>,
 }
 
@@ -20,6 +22,7 @@ impl AppError {
             message,
             details: None,
             partial_event: None,
+            cause: None,
         }
     }
 
@@ -37,11 +40,24 @@ impl AppError {
                 "pending": pending,
             })),
             partial_event: None,
+            cause: None,
         }
     }
 
     pub(crate) fn with_partial_event(mut self, event: PartialEvent) -> Self {
         self.partial_event = Some(event);
+        self
+    }
+
+    /// Attaches the failing CLI's stderr as a sanitized one-line cause.
+    pub(crate) fn with_stderr(mut self, stderr: &[u8]) -> Self {
+        self.cause = cli_cause(stderr);
+        self
+    }
+
+    /// Attaches a pre-sanitized one-line cause.
+    pub(crate) fn with_cause(mut self, cause: &str) -> Self {
+        self.cause = cli_cause(cause.as_bytes());
         self
     }
 
@@ -202,5 +218,80 @@ impl AppError {
 
     pub const fn output() -> Self {
         Self::new("output", "workctl could not write its output")
+    }
+}
+
+const CAUSE_LIMIT: usize = 300;
+const SECRET_PREFIXES: [&str; 8] = [
+    "ghp_",
+    "gho_",
+    "ghu_",
+    "ghs_",
+    "ghr_",
+    "github_pat_",
+    "glpat-",
+    "gldt-",
+];
+
+/// First non-empty stderr line of a failing CLI, bounded and stripped of credentials.
+///
+/// Control characters are left for the writers to escape. Words that look like tokens, the word
+/// after `Bearer`/`token`, and URLs with embedded credentials are replaced with `[redacted]`.
+pub(crate) fn cli_cause(stderr: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(stderr);
+    let line = text.lines().map(str::trim).find(|line| !line.is_empty())?;
+    let mut words = Vec::new();
+    let mut redact_next = false;
+    for word in line.split_whitespace() {
+        let lower = word.to_ascii_lowercase();
+        let secret = redact_next
+            || SECRET_PREFIXES.iter().any(|prefix| lower.contains(prefix))
+            || embeds_credentials(word);
+        redact_next = matches!(
+            lower.as_str(),
+            "bearer" | "token" | "authorization:" | "basic"
+        );
+        words.push(if secret { "[redacted]" } else { word });
+    }
+    let joined = words.join(" ");
+    let mut cause = String::new();
+    for character in joined.chars().take(CAUSE_LIMIT) {
+        cause.push(character);
+    }
+    if joined.chars().count() > CAUSE_LIMIT {
+        cause.push('…');
+    }
+    Some(cause)
+}
+
+fn embeds_credentials(word: &str) -> bool {
+    word.split_once("://").is_some_and(|(_, rest)| {
+        rest.split('/')
+            .next()
+            .is_some_and(|auth| auth.contains('@'))
+    })
+}
+
+#[cfg(test)]
+mod cause_tests {
+    use super::cli_cause;
+
+    #[test]
+    fn keeps_first_line_and_redacts_credentials() {
+        let cause = cli_cause(
+            b"\n  HTTP 403: token ghp_abc123 rejected for https://u:p@host/x Bearer s3cret\nsecond",
+        )
+        .unwrap();
+        assert_eq!(
+            cause,
+            "HTTP 403: token [redacted] rejected for [redacted] Bearer [redacted]"
+        );
+    }
+
+    #[test]
+    fn bounds_length_and_ignores_blank_stderr() {
+        assert!(cli_cause(b"  \n\t").is_none());
+        let long = "x".repeat(1000);
+        assert_eq!(cli_cause(long.as_bytes()).unwrap().chars().count(), 301);
     }
 }

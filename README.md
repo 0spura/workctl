@@ -33,6 +33,8 @@ commands. Updates are never installed automatically.
 
 ```sh
 workctl issue create --title "Fix the parser" --body-file report.md --label bug --milestone "1.4"
+workctl issue create --title "Tokenizer" --parent 100   # new sub-issue of #100 (number or URL)
+workctl issue create --title "Rollout" --blocked-by 200,201 --blocking 300
 workctl issue list --state open --limit 30            # open|closed|all, limit 1-1000, default 30
 workctl issue view 123                               # body, type, parent, sub-issues
 workctl issue blockers 30                            # "#18 -> #29 -> #30", bounded traversal
@@ -105,7 +107,8 @@ notes, and discussions keep the requested content. Terminal controls are escaped
 and tabs stay readable.
 
 `--format json` or `defaults.output.format: "json"` selects the unchanged structured schemas, with the
-explicit flag winning. Errors print `code: message` on stderr, or JSON when selected, and always exit
+explicit flag winning. Errors print `code: message: cause` on stderr (the cause is the provider's or
+usage-parser's first diagnostic line, sanitized), or JSON when selected, and always exit
 nonzero with an empty stdout. Partial failures keep resource identity plus completed/pending
 operations; no retry, no rollback.
 

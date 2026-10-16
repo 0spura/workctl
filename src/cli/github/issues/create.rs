@@ -1,5 +1,6 @@
 use clap::Args;
 
+use super::references::IssueReference;
 use crate::cli::common;
 
 #[derive(Debug, Args)]
@@ -8,8 +9,17 @@ pub struct CreateArgs {
     #[arg(short = 't', long, value_parser = common::parse_non_blank)]
     pub title: String,
     /// Issue body text
-    #[arg(short = 'b', long)]
+    #[arg(short = 'b', long, allow_hyphen_values = true)]
     pub body: Option<String>,
+    /// Add the new issue as a sub-issue of this parent, by number or URL
+    #[arg(long, value_name = "NUMBER|URL")]
+    pub parent: Option<IssueReference>,
+    /// Mark the new issue as blocked by these issues; repeat or comma-separate
+    #[arg(long, value_name = "NUMBER|URL", value_delimiter = ',')]
+    pub blocked_by: Vec<IssueReference>,
+    /// Mark the new issue as blocking these issues; repeat or comma-separate
+    #[arg(long, value_name = "NUMBER|URL", value_delimiter = ',')]
+    pub blocking: Vec<IssueReference>,
     /// Read the body from a file; `-` reads standard input
     #[arg(short = 'F', long = "body-file", value_name = "FILE")]
     pub body_file: Option<String>,

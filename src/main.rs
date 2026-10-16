@@ -119,9 +119,11 @@ fn report_parse_failure(
         _ => {
             let message =
                 wrong_group_hint(providers, &error).unwrap_or("invalid command-line arguments");
+            let rendered = error.render().to_string();
+            let detail = rendered.trim_start().trim_start_matches("error:");
             output::error::write(
                 parse_error_format(argv, Some(target_root)),
-                &AppError::invalid_input(message),
+                &AppError::invalid_input(message).with_cause(detail),
             );
             ExitCode::from(2)
         }

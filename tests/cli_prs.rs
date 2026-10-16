@@ -601,7 +601,7 @@ fn update_branch_forwards_default_and_rebase_modes_and_safely_reports_failure() 
     assert_eq!(failed.status.code(), Some(1));
     assert!(failed.stdout.is_empty());
     assert_eq!(error_json(&failed)["code"], "github_cli");
-    assert!(!String::from_utf8_lossy(&failed.stderr).contains("private provider diagnostic"));
+    assert_eq!(error_json(&failed)["cause"], "private provider diagnostic");
 }
 
 // RF-PR.15: Checkout delegates to gh without its force option and preserves safe failures.
@@ -656,7 +656,7 @@ fn checkout_switches_to_the_pr_branch_without_force_and_reports_safe_failure() {
     assert_eq!(failed.status.code(), Some(1));
     assert!(failed.stdout.is_empty());
     assert_eq!(error_json(&failed)["code"], "github_cli");
-    assert!(!String::from_utf8_lossy(&failed.stderr).contains("private provider diagnostic"));
+    assert_eq!(error_json(&failed)["cause"], "private provider diagnostic");
 
     let force = fixture.run_pr(&["pr", "checkout", "42", "--force"], "");
     assert_eq!(force.status.code(), Some(2));

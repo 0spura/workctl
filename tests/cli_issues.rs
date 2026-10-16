@@ -1475,7 +1475,11 @@ fn project_edit_reports_issue_success_and_stops_after_field_failure() {
         assert_eq!(log.matches("project item-edit").count(), 1);
         assert!(log.contains("--field-id NOTES_ID --text updated"));
         assert!(!log.contains("item-add"));
-        assert!(!String::from_utf8_lossy(&output.stderr).contains("private project diagnostic"));
+        if title.is_some() {
+            assert!(error.get("cause").is_none());
+        } else {
+            assert_eq!(error["cause"], "private project diagnostic");
+        }
     }
 }
 
@@ -1599,8 +1603,9 @@ fn view_rejects_incomplete_relationship_graphs_without_leaking_diagnostics() {
     let failure = fixture.run_issue_json(&["issue", "view", "7"], "relationship-failure");
     assert_eq!(error_json(&failure)["code"], "github_cli");
     assert!(failure.stdout.is_empty());
-    assert!(
-        !String::from_utf8_lossy(&failure.stderr).contains("private relationship query diagnostic")
+    assert_eq!(
+        error_json(&failure)["cause"],
+        "private relationship query diagnostic"
     );
 
     let mut missing = empty_relationships();
@@ -1752,7 +1757,10 @@ fn blockers_empty_closed_and_failure_results_are_unambiguous() {
     let failed = fixture.run_issue_json(&["issue", "blockers", "30"], "blocker-failure");
     assert_eq!(error_json(&failed)["code"], "github_cli");
     assert!(failed.stdout.is_empty());
-    assert!(!String::from_utf8_lossy(&failed.stderr).contains("private blocker query diagnostic"));
+    assert_eq!(
+        error_json(&failed)["cause"],
+        "private blocker query diagnostic"
+    );
 }
 
 #[test]
@@ -2216,4 +2224,68 @@ fn configured_output_format_applies_until_the_flag_overrides_it() {
         success_json(&json)["url"],
         "https://github.com/owner/repo/issues/7"
     );
+}
+
+#[test]
+fn markdown_bodies_may_start_with_a_hyphen_and_usage_errors_name_the_argument() {
+    let fixture = Fixture::new();
+    let comment = fixture.run_issue_json(&["issue", "comment", "7", "--body", "- first item"], "");
+    assert_eq!(success_json(&comment)["target"], "issue");
+    assert_eq!(
+        fs::read_to_string(&fixture.input).expect("read comment input"),
+        "- first item"
+    );
+
+    let unknown = fixture.run_issue_json(&["issue", "view", "7", "--bogus"], "");
+    let error = error_json(&unknown);
+    assert_eq!(error["code"], "invalid_input");
+    assert!(
+        error["cause"]
+            .as_str()
+            .is_some_and(|cause| cause.contains("--bogus")),
+        "usage errors must say which argument was rejected, got {error}"
+    );
+}
+
+#[test]
+fn create_forwards_the_parent_by_number_or_canonical_url() {
+    let fixture = Fixture::new();
+    success_json(&fixture.run_issue_json(
+        &["issue", "create", "--title", "Child", "--parent", "100"],
+        "",
+    ));
+    success_json(&fixture.run_issue_json(
+        &[
+            "issue",
+            "create",
+            "--title",
+            "Cross",
+            "--parent",
+            "https://github.com/other/epics/issues/5",
+        ],
+        "",
+    ));
+    success_json(&fixture.run_issue_json(
+        &[
+            "issue",
+            "create",
+            "--title",
+            "Linked",
+            "--blocked-by",
+            "200,https://github.com/owner/repo/issues/201",
+            "--blocking",
+            "300",
+        ],
+        "",
+    ));
+    let log = fs::read_to_string(&fixture.log).expect("read gh arguments");
+    assert!(
+        log.contains("issue create --repo owner/repo --title Child --body-file - --parent 100")
+    );
+    assert!(log.contains("--parent https://github.com/other/epics/issues/5"));
+    assert!(log.contains("--blocked-by 200 --blocked-by 201 --blocking 300"));
+
+    let invalid =
+        fixture.run_issue_json(&["issue", "create", "--title", "Bad", "--parent", "0"], "");
+    assert_eq!(error_json(&invalid)["code"], "invalid_input");
 }

@@ -369,7 +369,7 @@ Pull-request reopening is now `pr edit NUMBER --state open`; there is no `pr reo
 - Default behavior merges the latest base branch into the pull-request branch with a merge commit. `--rebase` instead rebases the pull-request branch onto the latest base branch.
 - The operation does not check out or modify a local branch and does not fetch a separate PR snapshot.
 - On success, return `{ "number", "rebase" }`, where `rebase` reflects the selected strategy. Text output states the PR number and whether merge or rebase was requested.
-- Errors: `github_cli` when the provider operation fails. Provider diagnostics are withheld and stdout remains empty.
+- Errors: `github_cli` when the provider operation fails, with a sanitized `cause` (ADR 0049). Remaining provider diagnostics are withheld and stdout remains empty.
 
 **Acceptance:** The default invocation omits `--rebase`; the explicit flag reaches `gh` and selects rebase. Success reports the selected strategy; provider failure emits a structured error and no partial success output.
 **Verification:** `tests/cli_prs.rs` covers default and rebase argument forwarding, text output, and safe provider failure.
@@ -380,7 +380,7 @@ Pull-request reopening is now `pr edit NUMBER --state open`; there is no `pr reo
 - `pr checkout NUMBER` checks out the pull request's branch in the caller's current worktree by delegating to `gh pr checkout NUMBER --repo OWNER/REPO`.
 - Use GitHub CLI's default checkout behavior. Do not pass `--force` or expose branch-name, detached-HEAD, or separate-worktree options; `gh` remains responsible for branch lookup and its normal local-change protections.
 - On success, JSON output is `{ "number" }`; text output states that the PR was checked out. The command changes the current local branch.
-- Errors: `github_cli` when checkout fails. Provider diagnostics are withheld and stdout remains empty.
+- Errors: `github_cli` when checkout fails, with a sanitized `cause` (ADR 0049). Remaining provider diagnostics are withheld and stdout remains empty.
 
 **Acceptance:** A successful checkout changes the current worktree to the PR branch; provider failure returns no partial success and no diagnostic leakage; `--force` is rejected before provider access. The exact `gh pr checkout` invocation includes repository context and never includes `--force`.
 **Verification:** `tests/cli_prs.rs` runs against a temporary Git worktree, verifies its current branch after checkout, and covers safe failure and rejection of force.
@@ -483,10 +483,10 @@ Pull-request unlocking is now `pr lock NUMBER --undo`; there is no `pr unlock` a
 
 - `issue view NUMBER` returns the shared issue record: the GitLab `iid` as `number`, `description` as `body` (a missing description is an empty body), the state normalized to `open|closed`, and `title`, `url`, `created_at`, and `updated_at` as `glab` reports them. GitLab-only fields (`confidential`, `weight`, `due_date`, `labels`, `assignees`, `author`) are not part of the record.
 - Zero or malformed numbers are usage errors before `glab` runs.
-- Errors: `gitlab_cli` when the read fails, with the provider's stderr withheld.
+- Errors: `gitlab_cli` when the read fails, with a sanitized `cause` (ADR 0049); remaining provider stderr is withheld.
 
 **Acceptance:** A valid issue returns exactly the shared record shape; zero or malformed numbers are usage errors; a failed read reports `gitlab_cli` without leaking provider stderr.
-**Verification:** Integration tests `gitlab_view_maps_the_description_onto_the_body`, `gitlab_rejects_an_invalid_issue_number_before_glab`, and `gitlab_failures_report_stable_codes_without_provider_output`.
+**Verification:** Integration tests `gitlab_view_maps_the_description_onto_the_body`, `gitlab_rejects_an_invalid_issue_number_before_glab`, and `gitlab_failures_report_stable_codes_and_the_sanitized_provider_cause`.
 
 ### RF-GL.4: Create a GitLab issue
 **Priority:** Must Have | **Status:** Implemented | **Dependencies:** RF-GL.1
@@ -547,7 +547,7 @@ Pull-request unlocking is now `pr lock NUMBER --undo`; there is no `pr unlock` a
 
 - `mr diff IID` delegates to native `glab mr diff IID --repo URL --color=never`; `--raw` is forwarded only when requested.
 - Output is `{ "number", "diff" }`; invalid IIDs fail before authentication, and malformed UTF-8 provider output fails as `provider_response`.
-- Provider stderr remains withheld under the shared GitLab error contract.
+- Provider stderr is relayed only as the sanitized `cause` of the shared GitLab error contract (ADR 0049).
 
 **Acceptance:** The isolated CLI test observes the native diff invocation and proves the returned diff content is preserved.
 **Verification:** `tests/cli_gitlab_mr.rs`.

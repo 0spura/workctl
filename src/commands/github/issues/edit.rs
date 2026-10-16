@@ -276,7 +276,7 @@ pub(super) fn execute(args: EditArgs, repo: String) -> Result<SuccessOutput, App
     }
 }
 
-fn relation_arguments(references: Vec<IssueReference>, repo: &str) -> Vec<String> {
+pub(super) fn relation_arguments(references: Vec<IssueReference>, repo: &str) -> Vec<String> {
     let mut values = Vec::with_capacity(references.len());
     for reference in references {
         let value = match reference.repo {

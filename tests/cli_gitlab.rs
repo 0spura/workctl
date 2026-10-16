@@ -355,23 +355,21 @@ fn gitlab_grammar_rejects_github_flags_and_invalid_page() {
 }
 
 #[test]
-fn gitlab_failures_report_stable_codes_without_provider_output() {
+fn gitlab_failures_report_stable_codes_and_the_sanitized_provider_cause() {
     let fixture = Fixture::new();
     let unauthenticated = fixture.run_gitlab_json(&["issue", "list"], "auth-failure");
     assert_eq!(error_json(&unauthenticated)["code"], "authentication");
+    assert!(
+        !String::from_utf8_lossy(&unauthenticated.stderr).contains("private provider diagnostic"),
+        "authentication failures keep provider stderr private"
+    );
 
     let fixture = Fixture::new();
     let failed = fixture.run_gitlab_json(&["issue", "list"], "list-failure");
     let error = error_json(&failed);
     assert_eq!(error["code"], "gitlab_cli");
     assert_eq!(error["message"], "the GitLab CLI operation failed");
-
-    for output in [unauthenticated, failed] {
-        assert!(
-            !String::from_utf8_lossy(&output.stderr).contains("private provider diagnostic"),
-            "provider stderr must not reach the caller"
-        );
-    }
+    assert_eq!(error["cause"], "private provider diagnostic");
 }
 
 #[test]
