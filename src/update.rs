@@ -54,7 +54,11 @@ pub fn check() -> Result<UpdateStatus, AppError> {
         .map_err(|_| AppError::context("could not check workctl updates from GitHub"))?;
     let result = runtime.block_on(fetch_latest_revision());
     runtime.shutdown_background();
-    let latest = result?;
+    let latest = match result {
+        Ok(latest) => latest,
+        // The unauthenticated API is rate limited; the Git transport is not.
+        Err(error) => ls_remote_revision().ok_or(error)?,
+    };
     Ok(update_status(CURRENT_REVISION.to_ascii_lowercase(), latest))
 }
 
@@ -86,6 +90,25 @@ pub fn run(check_only: bool) -> Result<UpdateStatus, AppError> {
             "could not run cargo; install Rust's cargo or run the install command manually",
         )),
     }
+}
+
+/// Reads `main`'s revision through `git ls-remote`, which has no API rate limit.
+fn ls_remote_revision() -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args([
+            "ls-remote",
+            "https://github.com/0spura/workctl",
+            "refs/heads/main",
+        ])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()
+        .filter(|output| output.status.success())?;
+    let text = String::from_utf8(output.stdout).ok()?;
+    let sha = text.split_whitespace().next()?;
+    valid_revision(sha).then(|| sha.to_ascii_lowercase())
 }
 
 async fn fetch_latest_revision() -> Result<String, AppError> {

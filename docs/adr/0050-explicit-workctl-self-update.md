@@ -25,6 +25,7 @@ The child process gets a null stdin and stdout; Cargo's progress stays on stderr
 
 - Download a release binary: rejected; no release artifacts exist.
 - Install from the automatic check: rejected; it would change installed code without an explicit command.
+- Rely only on the API: rejected; the unauthenticated rate limit (403) made `update` fail. `git ls-remote` on the same repository is the fallback.
 
 ## Traceability
 
