@@ -198,10 +198,18 @@ fn write_to(stdout: &mut impl Write, output: &SuccessOutput) -> Result<(), AppEr
             writeln!(stdout, "workflow action {id} {state}").map_err(|_| AppError::output())?;
         }
         SuccessOutput::UpdateStatus(status) => {
-            if let Some(install_command) = status.install_command {
+            if status.installed {
                 writeln!(
                     stdout,
-                    "Update available: {} → {}. Run `{install_command}`.",
+                    "Updated workctl: {} → {}",
+                    &status.current[..7],
+                    &status.latest[..7]
+                )
+                .map_err(|_| AppError::output())?;
+            } else if let Some(install_command) = status.install_command {
+                writeln!(
+                    stdout,
+                    "Update available: {} → {}. Run `workctl update` or `{install_command}`.",
                     &status.current[..7],
                     &status.latest[..7]
                 )

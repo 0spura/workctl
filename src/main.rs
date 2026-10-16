@@ -56,7 +56,10 @@ fn main() -> ExitCode {
     };
     globals.resolved_format = format;
     if matches.subcommand_name() == Some("update") {
-        return match update::check()
+        let check_only = matches
+            .subcommand_matches("update")
+            .is_some_and(|update| update.get_flag("check"));
+        return match update::run(check_only)
             .and_then(|status| output::write(format, &output::SuccessOutput::UpdateStatus(status)))
         {
             Ok(()) => ExitCode::SUCCESS,
@@ -90,7 +93,7 @@ fn main() -> ExitCode {
             if let Some(status) = update::check_if_due() {
                 if status.update_available {
                     eprintln!(
-                        "workctl update available ({} → {}); run `cargo install --git https://github.com/0spura/workctl --locked --force`",
+                        "workctl update available ({} → {}); run `workctl update`",
                         &status.current[..7],
                         &status.latest[..7]
                     );

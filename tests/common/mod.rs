@@ -843,7 +843,8 @@ exit 64
             .env("WORKCTL_GH_MODE", mode)
             .env("WORKCTL_GLAB_LOG", &self.glab_log)
             .env("WORKCTL_GLAB_INPUT", &self.glab_input)
-            .env("WORKCTL_GLAB_MODE", mode);
+            .env("WORKCTL_GLAB_MODE", mode)
+            .env("XDG_CACHE_HOME", self.root.join("cache"));
         command
     }
 
@@ -950,7 +951,11 @@ pub fn success_json(output: &Output) -> Value {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(output.stderr.is_empty());
+    assert!(
+        output.stderr.is_empty(),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     serde_json::from_slice(&output.stdout).expect("valid JSON success output")
 }
 

@@ -14,7 +14,7 @@
 > Grammar-selection decision: [ADR-0017](./adr/0017-provider-selected-cli-grammar.md), superseding ADR-0016's single-surface premise and `--provider` as a grammar selector.
 > Provider-selector removal and worktree-scoped autodetection: [ADR-0046](./adr/0046-remove-provider-selection-cli-flags.md), superseding provider-selection CLI and generic `provider` config fallback in ADR-0017.
 > Local target-worktree context via `--repo-path`: [ADR-0047](./adr/0047-local-target-worktree-repo-path.md), extending the worktree boundary in ADR-0046.
-> Update checks: [ADR-0048](./adr/0048-workctl-update-check.md).
+> Update checks: [ADR-0048](./adr/0048-workctl-update-check.md), [ADR-0050](./adr/0050-explicit-workctl-self-update.md).
 > GitHub Project fields and issue defaults: [ADR-0018](./adr/0018-github-project-dynamic-fields.md), with automatic field selection added by [ADR-0019](./adr/0019-decision-model-project-field-selection.md).
 > GitHub issue relationship reads: [ADR-0023](./adr/0023-github-issue-view-relationships.md).
 > Read-only PR status evidence: [ADR-0028](./adr/0028-read-only-pr-status-evidence.md).
@@ -204,7 +204,7 @@ GitLab has its own grammar and adapter rather than extending the GitHub one. Git
 
 ## Update checks
 
-`workctl update` and the periodic notice query the fixed GitHub Git-reference API for `0spura/workctl`'s `main` revision and compare it with the Git SHA embedded by `build.rs`. The explicit command returns a safe error on request/response failure; automatic checks run after successful ordinary commands and are best-effort. The platform cache normally limits automatic checks to once per 24 hours; if cache reads or writes fail, the next command may retry. The request has a five-second timeout, refuses redirects, and sends no GitHub credentials. An available update prints only to stderr after ordinary command output; workctl reports the Cargo install command and never installs code itself.
+`workctl update` and the periodic notice query the fixed GitHub Git-reference API for `0spura/workctl`'s `main` revision and compare it with the Git SHA embedded by `build.rs`. The explicit command returns a safe error on request/response failure; automatic checks run after successful ordinary commands and are best-effort. The platform cache normally limits automatic checks to once per 24 hours; if cache reads or writes fail, the next command may retry. The request has a five-second timeout, refuses redirects, and sends no GitHub credentials. An available update prints only to stderr after ordinary command output and names `workctl update`. Only the explicit command installs: it spawns `cargo install --git … --locked --force` with stdin and stdout discarded and stderr inherited, so Cargo's progress never mixes with the result; `--check` skips the install ([ADR-0050](./adr/0050-explicit-workctl-self-update.md)).
 
 ## Proposed private semantic declarations
 

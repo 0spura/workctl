@@ -102,7 +102,16 @@ pub fn command_tree(providers: ProviderSelection) -> Command {
     root = root.subcommand(workflow::WorkflowAction::augment_subcommands(Command::new(
         "workflow",
     )));
-    root = root.subcommand(Command::new("update").about("Check for workctl updates"));
+    root = root.subcommand(
+        Command::new("update")
+            .about("Update workctl to the latest commit with `cargo install`")
+            .arg(
+                clap::Arg::new("check")
+                    .long("check")
+                    .action(clap::ArgAction::SetTrue)
+                    .help("Only report whether an update is available; do not install"),
+            ),
+    );
     root.version(env!("CARGO_PKG_VERSION"))
         .about("Manage work items and code-host requests")
         .after_help(

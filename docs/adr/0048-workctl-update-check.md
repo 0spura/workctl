@@ -1,6 +1,6 @@
 # 0048: Workctl update checks
 
-- Status: Accepted
+- Status: Superseded in part by [0050](0050-explicit-workctl-self-update.md) (never-install clause)
 - Date: 2026-10-13
 - Tracker: Not created; GitHub CLI authentication is unavailable.
 

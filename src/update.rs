@@ -31,6 +31,8 @@ pub struct UpdateStatus {
     pub update_available: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub install_command: Option<&'static str>,
+    /// True when this run replaced the installed binary with `latest`.
+    pub installed: bool,
 }
 
 #[derive(Debug, Deserialize, serde::Serialize)]
@@ -54,6 +56,36 @@ pub fn check() -> Result<UpdateStatus, AppError> {
     runtime.shutdown_background();
     let latest = result?;
     Ok(update_status(CURRENT_REVISION.to_ascii_lowercase(), latest))
+}
+
+/// Checks for a newer revision and, unless `check_only`, installs it with Cargo.
+///
+/// Cargo's progress goes to stderr; stdout stays reserved for the command result.
+pub fn run(check_only: bool) -> Result<UpdateStatus, AppError> {
+    let mut status = check()?;
+    if check_only || !status.update_available {
+        return Ok(status);
+    }
+    let mut words = INSTALL_COMMAND.split(' ');
+    let program = words.next().unwrap_or("cargo");
+    let result = std::process::Command::new(program)
+        .args(words)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .status();
+    match result {
+        Ok(code) if code.success() => {
+            status.installed = true;
+            status.install_command = None;
+            Ok(status)
+        }
+        Ok(_) => Err(AppError::context(
+            "cargo install failed; see the cargo output above",
+        )),
+        Err(_) => Err(AppError::context(
+            "could not run cargo; install Rust's cargo or run the install command manually",
+        )),
+    }
 }
 
 async fn fetch_latest_revision() -> Result<String, AppError> {
@@ -111,6 +143,7 @@ fn update_status(current: String, latest: String) -> UpdateStatus {
         latest,
         update_available,
         install_command: update_available.then_some(INSTALL_COMMAND),
+        installed: false,
     }
 }
 
